@@ -11,28 +11,53 @@ import (
 var ErrNotFound = errors.New("perfil não encontrado")
 
 type Profile struct {
-	UID             string    `firestore:"id" json:"uid"`
-	Email           string    `firestore:"email" json:"email"`
-	Nickname        string    `firestore:"nickname" json:"nickname"`
-	Age             int       `firestore:"age" json:"age"`
-	Timezone        string    `firestore:"timezone" json:"timezone"`
-	RankingOptIn    bool      `firestore:"rankingOptIn" json:"rankingOptIn"`
-	ProfileComplete bool      `firestore:"profileComplete" json:"profileComplete"`
-	CreatedAt       time.Time `firestore:"createdAt" json:"createdAt"`
-	UpdatedAt       time.Time `firestore:"updatedAt" json:"updatedAt"`
+	UID              string    `firestore:"id" json:"uid"`
+	Email            string    `firestore:"email" json:"email"`
+	Nickname         string    `firestore:"nickname" json:"nickname"`
+	Age              int       `firestore:"age" json:"age"`
+	WeightHundredths int64     `firestore:"weightHundredths" json:"weightHundredths"`
+	HeightHundredths int64     `firestore:"heightHundredths" json:"heightHundredths"`
+	Gender           string    `firestore:"gender" json:"gender"`
+	Timezone         string    `firestore:"timezone" json:"timezone"`
+	RankingOptIn     bool      `firestore:"rankingOptIn" json:"rankingOptIn"`
+	ProfileComplete  bool      `firestore:"profileComplete" json:"profileComplete"`
+	CreatedAt        time.Time `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt        time.Time `firestore:"updatedAt" json:"updatedAt"`
 }
 
 type Update struct {
-	Nickname     string
-	Age          int
-	Timezone     string
-	RankingOptIn bool
+	Nickname         string
+	Age              int
+	Timezone         string
+	RankingOptIn     bool
+	WeightHundredths int64
+	HeightHundredths int64
+	Gender           string
+}
+
+type Demographics struct {
+	Age              int
+	WeightHundredths int64
+	HeightHundredths int64
+	Gender           string
 }
 
 type Repository interface {
 	Ensure(ctx context.Context, candidate Profile) (Profile, error)
 	Get(ctx context.Context, uid string) (Profile, error)
 	Update(ctx context.Context, uid string, update Update, updatedAt time.Time) (Profile, error)
+	UpdateDemographics(ctx context.Context, uid string, demographics Demographics, updatedAt time.Time) (Profile, error)
+}
+
+func (s *Service) UpdateDemographics(ctx context.Context, identity auth.Identity, value Demographics) (Profile, error) {
+	if identity.UID == "" || identity.Email == "" {
+		return Profile{}, auth.ErrInvalidSession
+	}
+	value.Gender = NormalizeOptionalText(value.Gender)
+	if err := ValidateDemographics(value); err != nil {
+		return Profile{}, err
+	}
+	return s.repository.UpdateDemographics(ctx, identity.UID, value, normalizeFirestoreTimestamp(s.now()))
 }
 
 type Service struct {

@@ -1,0 +1,29 @@
+{{define "habit-form"}}
+<!doctype html><html lang="pt-BR">{{template "head" .}}<body>
+<header class="site-header">{{template "brand" .}}</header>
+<main class="page-shell habit-shell">
+  <div class="page-heading"><div><p class="eyebrow">Gestão de hábitos</p><h1>{{if .Habit.ID}}Editar Hábito{{else}}Criar Hábito{{end}}</h1></div><a href="/meus-habitos">Voltar</a></div>
+  <form class="card habit-form" data-habit-form data-habit-id="{{.Habit.ID}}">
+    <label>Título *<input name="title" maxlength="120" value="{{.Habit.Title}}" required></label>
+    <label>Descrição *<textarea name="description" maxlength="1000" required>{{.Habit.Description}}</textarea></label>
+    <fieldset><legend>Dados do usuário</legend><p class="field-help">Estes dados pertencem ao seu perfil e não ao hábito.</p><div class="form-grid">
+      <label>Idade *<input name="age" type="number" min="1" step="1" value="{{if gt .Profile.Age 0}}{{.Profile.Age}}{{end}}" required></label>
+      <label>Peso (kg)<input name="weight" inputmode="decimal" value="{{amount .Profile.WeightHundredths}}" placeholder="Opcional"></label>
+      <label>Altura (cm)<input name="height" inputmode="decimal" value="{{amount .Profile.HeightHundredths}}" placeholder="Opcional"></label>
+      <label>Gênero<input name="gender" value="{{.Profile.Gender}}" maxlength="100" placeholder="Opcional"></label>
+    </div></fieldset>
+    <fieldset><legend>Meta</legend><div class="choice-row">
+      <label><input type="radio" name="goalType" value="simple" {{if ne .Habit.GoalType "quantitative"}}checked{{end}}> Simples</label>
+      <label><input type="radio" name="goalType" value="quantitative" {{if eq .Habit.GoalType "quantitative"}}checked{{end}}> Quantitativa</label>
+    </div><div class="form-grid" data-quantitative>
+      <label>Quantidade<input name="target" inputmode="decimal" value="{{amount .Habit.TargetHundredths}}"></label>
+      <label>Unidade<select name="unit"><option value="pages" {{if eq .Habit.Unit "pages"}}selected{{end}}>páginas</option><option value="minutes" {{if eq .Habit.Unit "minutes"}}selected{{end}}>minutos</option><option value="kilometers" {{if eq .Habit.Unit "kilometers"}}selected{{end}}>km</option><option value="times" {{if eq .Habit.Unit "times"}}selected{{end}}>vezes</option><option value="liters" {{if eq .Habit.Unit "liters"}}selected{{end}}>litros</option><option value="other" {{if eq .Habit.Unit "other"}}selected{{end}}>Outra</option></select></label>
+      <label data-custom-unit>Unidade personalizada<input name="customUnit" value="{{.Habit.CustomUnit}}" maxlength="40"></label>
+    </div></fieldset>
+    <fieldset><legend>Dias da semana *</legend><div class="weekday-grid">{{range $day := (listWeekdays)}}<label><input type="checkbox" name="weekdays" value="{{$day}}" {{if hasWeekday $.Habit.Schedule.Weekdays $day}}checked{{end}}><span>{{weekdayLabel $day}}</span></label>{{end}}</div></fieldset>
+    <div class="form-grid"><label>Horário *<input type="time" name="time" value="{{.Habit.Schedule.Time}}" required></label><label>Meta semanal *<input type="number" name="weeklyTargetExecutions" min="1" max="7" value="{{if gt .Habit.Schedule.WeeklyTargetExecutions 0}}{{.Habit.Schedule.WeeklyTargetExecutions}}{{end}}" required></label></div>
+    <fieldset><legend>Relembrar por *</legend><div class="choice-row"><label><input type="radio" name="reminder" value="notification" {{if ne .Habit.Schedule.Reminder "email"}}{{if ne .Habit.Schedule.Reminder "both"}}checked{{end}}{{end}}> Notificação</label><label><input type="radio" name="reminder" value="email" {{if eq .Habit.Schedule.Reminder "email"}}checked{{end}}> E-mail</label><label><input type="radio" name="reminder" value="both" {{if eq .Habit.Schedule.Reminder "both"}}checked{{end}}> Ambos</label></div></fieldset>
+    <p class="form-message" data-form-message role="status"></p><button class="button button--primary" type="submit">Salvar hábito</button>
+  </form>
+</main>{{template "navigation" .}}<script type="module" src="/static/js/habits.js"></script></body></html>
+{{end}}

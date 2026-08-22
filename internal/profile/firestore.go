@@ -60,6 +60,9 @@ func (r *FirestoreRepository) Update(ctx context.Context, uid string, update Upd
 	_, err := document.Update(ctx, []firestore.Update{
 		{Path: "nickname", Value: update.Nickname},
 		{Path: "age", Value: update.Age},
+		{Path: "weightHundredths", Value: update.WeightHundredths},
+		{Path: "heightHundredths", Value: update.HeightHundredths},
+		{Path: "gender", Value: update.Gender},
 		{Path: "timezone", Value: update.Timezone},
 		{Path: "rankingOptIn", Value: update.RankingOptIn},
 		{Path: "profileComplete", Value: true},
@@ -70,6 +73,24 @@ func (r *FirestoreRepository) Update(ctx context.Context, uid string, update Upd
 	}
 	if err != nil {
 		return Profile{}, fmt.Errorf("atualizar perfil: %w", err)
+	}
+	return r.Get(ctx, uid)
+}
+
+func (r *FirestoreRepository) UpdateDemographics(ctx context.Context, uid string, value Demographics, updatedAt time.Time) (Profile, error) {
+	document := r.client.Collection("users").Doc(uid)
+	_, err := document.Update(ctx, []firestore.Update{
+		{Path: "age", Value: value.Age},
+		{Path: "weightHundredths", Value: value.WeightHundredths},
+		{Path: "heightHundredths", Value: value.HeightHundredths},
+		{Path: "gender", Value: value.Gender},
+		{Path: "updatedAt", Value: updatedAt},
+	})
+	if status.Code(err) == codes.NotFound {
+		return Profile{}, ErrNotFound
+	}
+	if err != nil {
+		return Profile{}, fmt.Errorf("atualizar dados do perfil: %w", err)
 	}
 	return r.Get(ctx, uid)
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -14,6 +15,7 @@ import (
 
 	"habitos/internal/auth"
 	"habitos/internal/csrf"
+	"habitos/internal/habit"
 	"habitos/internal/profile"
 )
 
@@ -71,7 +73,25 @@ func (r *fakeProfileRepository) Update(_ context.Context, uid string, update pro
 	value.Age = update.Age
 	value.Timezone = update.Timezone
 	value.RankingOptIn = update.RankingOptIn
+	value.WeightHundredths = update.WeightHundredths
+	value.HeightHundredths = update.HeightHundredths
+	value.Gender = update.Gender
 	value.ProfileComplete = true
+	value.UpdatedAt = updatedAt
+	r.profiles[uid] = value
+	return value, nil
+}
+
+func (r *fakeProfileRepository) UpdateDemographics(_ context.Context, uid string, update profile.Demographics, updatedAt time.Time) (profile.Profile, error) {
+	r.lastUID = uid
+	value, ok := r.profiles[uid]
+	if !ok {
+		return profile.Profile{}, profile.ErrNotFound
+	}
+	value.Age = update.Age
+	value.WeightHundredths = update.WeightHundredths
+	value.HeightHundredths = update.HeightHundredths
+	value.Gender = update.Gender
 	value.UpdatedAt = updatedAt
 	r.profiles[uid] = value
 	return value, nil
@@ -81,20 +101,151 @@ type testApp struct {
 	handler  http.Handler
 	sessions *fakeSessionManager
 	profiles *fakeProfileRepository
+	habits   *fakeHabitRepository
+}
+
+type fakeHabitRepository struct {
+	values   map[string]habit.Habit
+	versions map[string][]habit.ScheduleVersion
+	next     int
+}
+
+func newFakeHabitRepository() *fakeHabitRepository {
+	return &fakeHabitRepository{values: map[string]habit.Habit{}, versions: map[string][]habit.ScheduleVersion{}}
+}
+func (r *fakeHabitRepository) NewID() string { r.next++; return fmt.Sprintf("habit-%d", r.next) }
+func (r *fakeHabitRepository) Create(_ context.Context, value habit.Habit, version habit.ScheduleVersion) error {
+	r.values[value.ID] = value
+	r.versions[value.ID] = append(r.versions[value.ID], version)
+	return nil
+}
+func (r *fakeHabitRepository) Get(_ context.Context, uid, id string) (habit.Habit, error) {
+	value, ok := r.values[id]
+	if !ok || value.OwnerUID != uid || value.DeletedAt != nil {
+		return habit.Habit{}, habit.ErrNotFound
+	}
+	return value, nil
+}
+func (r *fakeHabitRepository) List(_ context.Context, uid string) ([]habit.Habit, error) {
+	var values []habit.Habit
+	for _, value := range r.values {
+		if value.OwnerUID == uid && value.DeletedAt == nil {
+			values = append(values, value)
+		}
+	}
+	return values, nil
+}
+func (r *fakeHabitRepository) Update(_ context.Context, value habit.Habit, version *habit.ScheduleVersion) error {
+	persisted, ok := r.values[value.ID]
+	if !ok || persisted.OwnerUID != value.OwnerUID || persisted.DeletedAt != nil {
+		return habit.ErrNotFound
+	}
+	if version != nil {
+		if persisted.PendingScheduleVersionID == version.ID && persisted.ScheduleEffectiveAt.Equal(version.EffectiveAt) {
+			for index := range r.versions[value.ID] {
+				if r.versions[value.ID][index].ID == version.ID {
+					r.versions[value.ID][index] = *version
+					r.values[value.ID] = value
+					return nil
+				}
+			}
+			return habit.ErrInvalidTransition
+		}
+		r.versions[value.ID] = append(r.versions[value.ID], *version)
+	}
+	r.values[value.ID] = value
+	return nil
 }
 
 func newTestApp(t *testing.T) testApp {
 	t.Helper()
 	sessions := &fakeSessionManager{identity: auth.Identity{UID: "firebase-user-a", Email: "a@example.com"}}
 	profiles := newFakeProfileRepository()
+	habits := newFakeHabitRepository()
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles)})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habit.NewService(habits)})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits}
+}
+
+func TestHabitCreationAndListingUseAuthenticatedUID(t *testing.T) {
+	app := newTestApp(t)
+	token, csrfCookie := issueCSRF(t, app.handler)
+	requestBody := `{"title":"Ler","description":"Ler diariamente","goalType":"quantitative","target":"20.00","unit":"pages","customUnit":"","weekdays":[1,3,5],"time":"19:00","weeklyTargetExecutions":3,"reminder":"notification","age":16,"weight":"60.50","height":"170","gender":""}`
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/habits?userId=firebase-user-b", strings.NewReader(requestBody))
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("criação status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+	for _, value := range app.habits.values {
+		if value.OwnerUID != "firebase-user-a" {
+			t.Fatalf("ownerUID=%q", value.OwnerUID)
+		}
+		if value.TargetHundredths != 2000 {
+			t.Fatalf("quantidade persistida=%d", value.TargetHundredths)
+		}
+	}
+	userProfile := app.profiles.profiles["firebase-user-a"]
+	if userProfile.WeightHundredths != 6050 || userProfile.HeightHundredths != 17000 {
+		t.Fatalf("dados do perfil não foram atualizados: %#v", userProfile)
+	}
+	app.habits.values["other"] = habit.Habit{ID: "other", OwnerUID: "firebase-user-b", Title: "Segredo", Status: habit.StatusActive}
+	listRecorder := httptest.NewRecorder()
+	listRequest := httptest.NewRequest(http.MethodGet, "/meus-habitos", nil)
+	listRequest.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(listRecorder, listRequest)
+	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), "Segredo") {
+		t.Fatalf("listagem vazou hábito: status=%d", listRecorder.Code)
+	}
+}
+
+func TestHabitRoutesHideAnotherUsersHabit(t *testing.T) {
+	app := newTestApp(t)
+	app.habits.values["habit-b"] = habit.Habit{ID: "habit-b", OwnerUID: "firebase-user-b", Title: "Privado", Status: habit.StatusActive}
+	request := httptest.NewRequest(http.MethodGet, "/habitos/habit-b", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("detalhe status=%d", recorder.Code)
+	}
+	token, cookie := issueCSRF(t, app.handler)
+	deleteRequest := httptest.NewRequest(http.MethodDelete, "/api/habits/habit-b", strings.NewReader(`{}`))
+	deleteRequest.Header.Set(csrf.HeaderName, token)
+	deleteRequest.AddCookie(cookie)
+	deleteRequest.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	deleteRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(deleteRecorder, deleteRequest)
+	if deleteRecorder.Code != http.StatusNotFound || app.habits.values["habit-b"].DeletedAt != nil {
+		t.Fatalf("exclusão status=%d", deleteRecorder.Code)
+	}
+}
+
+func TestParseDecimalFieldsExactly(t *testing.T) {
+	for input, want := range map[string]int64{"1": 100, "1,2": 120, "1.23": 123, "": 0} {
+		got, err := parseOptionalHundredths(input)
+		if err != nil || got != want {
+			t.Fatalf("%q=%d erro=%v; esperado %d", input, got, err, want)
+		}
+	}
+	for _, input := range []string{"0.001", "-1", "abc"} {
+		if _, err := parseOptionalHundredths(input); err == nil {
+			t.Fatalf("%q deveria ser inválido", input)
+		}
+	}
+	for _, input := range []string{"0", "0.00"} {
+		if _, err := parsePositiveOptionalHundredths(input); err == nil {
+			t.Fatalf("%q deveria ser inválido para campo opcional positivo", input)
+		}
+	}
 }
 
 func TestHealth(t *testing.T) {

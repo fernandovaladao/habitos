@@ -17,6 +17,12 @@
         <small id="nickname-help">3–24 caracteres: letras, números, espaços, _ ou -.</small>
         <label for="age">Idade</label>
         <input id="age" name="age" type="number" min="1" step="1" value="{{if gt .Profile.Age 0}}{{.Profile.Age}}{{end}}" required>
+        <label for="weight">Peso (kg, opcional)</label>
+        <input id="weight" name="weight" inputmode="decimal" value="{{amount .Profile.WeightHundredths}}">
+        <label for="height">Altura (cm, opcional)</label>
+        <input id="height" name="height" inputmode="decimal" value="{{amount .Profile.HeightHundredths}}">
+        <label for="gender">Gênero (opcional)</label>
+        <input id="gender" name="gender" type="text" maxlength="100" value="{{.Profile.Gender}}">
         <label for="timezone">Timezone</label>
         <input id="timezone" name="timezone" type="text" value="{{.Profile.Timezone}}" required aria-describedby="timezone-help">
         <small id="timezone-help">Use um identificador IANA, como America/Sao_Paulo.</small>
@@ -35,4 +41,3 @@
 </body>
 </html>
 {{end}}
-

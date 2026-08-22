@@ -51,7 +51,26 @@ func (r *memoryRepository) Update(_ context.Context, uid string, update Update, 
 	value.Age = update.Age
 	value.Timezone = update.Timezone
 	value.RankingOptIn = update.RankingOptIn
+	value.WeightHundredths = update.WeightHundredths
+	value.HeightHundredths = update.HeightHundredths
+	value.Gender = update.Gender
 	value.ProfileComplete = true
+	value.UpdatedAt = updatedAt
+	r.profiles[uid] = value
+	return value, nil
+}
+
+func (r *memoryRepository) UpdateDemographics(_ context.Context, uid string, update Demographics, updatedAt time.Time) (Profile, error) {
+	value, ok := r.profiles[uid]
+	if !ok {
+		return Profile{}, ErrNotFound
+	}
+	r.lastUpdateUID = uid
+	r.lastUpdatedAt = updatedAt
+	value.Age = update.Age
+	value.WeightHundredths = update.WeightHundredths
+	value.HeightHundredths = update.HeightHundredths
+	value.Gender = update.Gender
 	value.UpdatedAt = updatedAt
 	r.profiles[uid] = value
 	return value, nil

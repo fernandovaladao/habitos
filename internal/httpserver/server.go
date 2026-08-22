@@ -9,10 +9,13 @@ import (
 	"io/fs"
 	"log/slog"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"habitos/internal/auth"
 	"habitos/internal/csrf"
+	"habitos/internal/habit"
 	"habitos/internal/profile"
 	webassets "habitos/web"
 )
@@ -35,6 +38,7 @@ type Config struct {
 type Dependencies struct {
 	Sessions auth.SessionManager
 	Profiles *profile.Service
+	Habits   *habit.Service
 }
 
 type pageData struct {
@@ -44,6 +48,10 @@ type pageData struct {
 	Authenticated   bool
 	Email           string
 	Profile         profile.Profile
+	Habit           habit.Habit
+	Habits          []habit.Habit
+	Filter          habit.ListFilter
+	SchedulePending bool
 	FirebaseEnabled bool
 }
 
@@ -53,6 +61,7 @@ type handler struct {
 	logger        *slog.Logger
 	sessions      auth.SessionManager
 	profiles      *profile.Service
+	habits        *habit.Service
 	auth          *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
@@ -86,11 +95,11 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil {
-		return nil, errors.New("dependências de autenticação e perfil são obrigatórias")
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil {
+		return nil, errors.New("dependências de autenticação, perfil e hábitos são obrigatórias")
 	}
 
-	templates, err := template.ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
+	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "reminderLabel": reminderLabel, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("carregar templates: %w", err)
 	}
@@ -105,6 +114,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		logger:        config.Logger,
 		sessions:      dependencies.Sessions,
 		profiles:      dependencies.Profiles,
+		habits:        dependencies.Habits,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
@@ -122,6 +132,12 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("POST /api/auth/logout", h.csrf.Protect(http.HandlerFunc(h.logout)))
 	mux.Handle("POST /api/profile/ensure", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
 	mux.Handle("PUT /api/profile", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
+	mux.Handle("POST /api/habits", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
+	mux.Handle("PUT /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
+	mux.Handle("POST /api/habits/{id}/duplicate", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.duplicateHabit))))
+	mux.Handle("POST /api/habits/{id}/archive", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
+	mux.Handle("POST /api/habits/{id}/reactivate", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.reactivateHabit))))
+	mux.Handle("DELETE /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteHabit))))
 
 	mux.HandleFunc("GET /{$}", h.home)
 	mux.HandleFunc("GET /entrar", h.loginPage)
@@ -129,13 +145,15 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.HandleFunc("GET /recuperar-senha", h.passwordResetPage)
 	mux.Handle("GET /alterar-senha", h.auth.RequirePage(http.HandlerFunc(h.changePasswordPage)))
 	mux.Handle("GET /perfil", h.auth.RequirePage(http.HandlerFunc(h.profilePage)))
+	mux.Handle("GET /criar-habito", h.auth.RequirePage(http.HandlerFunc(h.createHabitPage)))
+	mux.Handle("GET /meus-habitos", h.auth.RequirePage(http.HandlerFunc(h.habitsPage)))
+	mux.Handle("GET /habitos/{id}", h.auth.RequirePage(http.HandlerFunc(h.habitDetailsPage)))
+	mux.Handle("GET /habitos/{id}/editar", h.auth.RequirePage(http.HandlerFunc(h.editHabitPage)))
 	mux.HandleFunc("GET /aprenda-4rs", h.publicPlaceholder(pageData{
 		Title: "Aprenda os 4 Rs", Description: "O conteúdo completo sobre os 4 Rs será disponibilizado em uma próxima etapa.", Path: "/aprenda-4rs",
 	}))
 
 	privatePages := []pageData{
-		{Title: "Criar Hábito", Description: "A criação de hábitos será disponibilizada em uma próxima etapa.", Path: "/criar-habito"},
-		{Title: "Meus Hábitos", Description: "A gestão de hábitos será disponibilizada em uma próxima etapa.", Path: "/meus-habitos"},
 		{Title: "Progresso", Description: "O acompanhamento de progresso será disponibilizado em uma próxima etapa.", Path: "/progresso"},
 		{Title: "Recompensas", Description: "Recompensas e ranking serão disponibilizados em uma próxima etapa.", Path: "/recompensas"},
 	}
@@ -180,6 +198,80 @@ func (h *handler) profilePage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.render(w, http.StatusOK, "profile", pageData{Title: "Perfil", Description: "Seu perfil básico.", Path: "/perfil", Authenticated: true, Email: identity.Email, Profile: userProfile})
+}
+
+func (h *handler) authenticatedProfile(r *http.Request) (auth.Identity, profile.Profile, error) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	value, err := h.profiles.EnsureProfile(r.Context(), identity, "UTC")
+	return identity, value, err
+}
+
+func (h *handler) createHabitPage(w http.ResponseWriter, r *http.Request) {
+	_, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "habit-form", pageData{Title: "Criar Hábito", Description: "Crie um hábito e configure sua rotina.", Path: "/criar-habito", Authenticated: true, Profile: userProfile})
+}
+
+func (h *handler) editHabitPage(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	value, err := h.habits.Get(r.Context(), identity, r.PathValue("id"))
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "habit-form", pageData{Title: "Editar Hábito", Description: "Atualize a configuração do hábito.", Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value})
+}
+
+func (h *handler) habitsPage(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	filter := habit.ListFilter(r.URL.Query().Get("filtro"))
+	if filter == "" {
+		filter = habit.FilterAll
+	}
+	if filter != habit.FilterAll && filter != habit.FilterToday && filter != habit.FilterCompleted {
+		filter = habit.FilterAll
+	}
+	values, err := h.habits.List(r.Context(), identity, userProfile.Timezone, filter)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "habits", pageData{Title: "Meus Hábitos", Description: "Gerencie seus hábitos.", Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habits: values, Filter: filter})
+}
+
+func (h *handler) habitDetailsPage(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	value, err := h.habits.Get(r.Context(), identity, r.PathValue("id"))
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "habit-details", pageData{Title: "Detalhes do Hábito", Description: value.Title, Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value, SchedulePending: value.PreviousSchedule != nil && time.Now().Before(value.ScheduleEffectiveAt)})
+}
+
+func (h *handler) renderHabitError(w http.ResponseWriter, err error) {
+	statusCode := http.StatusInternalServerError
+	description := "Não foi possível concluir a operação."
+	if errors.Is(err, habit.ErrNotFound) {
+		statusCode = http.StatusNotFound
+		description = "Hábito não encontrado."
+	}
+	h.render(w, statusCode, "error", pageData{Title: "Erro", Description: description, Authenticated: true})
 }
 
 func (h *handler) publicPlaceholder(page pageData) http.HandlerFunc {
@@ -271,15 +363,24 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		Age          int    `json:"age"`
 		Timezone     string `json:"timezone"`
 		RankingOptIn bool   `json:"rankingOptIn"`
+		Weight       string `json:"weight"`
+		Height       string `json:"height"`
+		Gender       string `json:"gender"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		http.Error(w, "Dados de perfil inválidos.", http.StatusBadRequest)
 		return
 	}
+	weight, weightErr := parsePositiveOptionalHundredths(input.Weight)
+	height, heightErr := parsePositiveOptionalHundredths(input.Height)
+	if weightErr != nil || heightErr != nil {
+		http.Error(w, "Peso e altura devem ser positivos e ter até 2 casas decimais.", http.StatusUnprocessableEntity)
+		return
+	}
 	userProfile, err := h.profiles.Update(r.Context(), identity, profile.Update{
-		Nickname: input.Nickname, Age: input.Age, Timezone: input.Timezone, RankingOptIn: input.RankingOptIn,
+		Nickname: input.Nickname, Age: input.Age, Timezone: input.Timezone, RankingOptIn: input.RankingOptIn, WeightHundredths: weight, HeightHundredths: height, Gender: input.Gender,
 	})
-	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) {
+	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) || errors.Is(err, profile.ErrInvalidWeight) || errors.Is(err, profile.ErrInvalidHeight) || errors.Is(err, profile.ErrInvalidGender) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}
@@ -289,6 +390,232 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, userProfile)
+}
+
+type habitRequest struct {
+	Title                  string                `json:"title"`
+	Description            string                `json:"description"`
+	GoalType               habit.GoalType        `json:"goalType"`
+	Target                 string                `json:"target"`
+	Unit                   habit.Unit            `json:"unit"`
+	CustomUnit             string                `json:"customUnit"`
+	Weekdays               []int                 `json:"weekdays"`
+	Time                   string                `json:"time"`
+	WeeklyTargetExecutions int                   `json:"weeklyTargetExecutions"`
+	Reminder               habit.ReminderChannel `json:"reminder"`
+	Age                    int                   `json:"age"`
+	Weight                 string                `json:"weight"`
+	Height                 string                `json:"height"`
+	Gender                 string                `json:"gender"`
+}
+
+func (input habitRequest) domain() (habit.Input, profile.Demographics, error) {
+	target, err := parseOptionalHundredths(input.Target)
+	if err != nil {
+		return habit.Input{}, profile.Demographics{}, habit.ErrInvalidGoal
+	}
+	weight, err := parsePositiveOptionalHundredths(input.Weight)
+	if err != nil {
+		return habit.Input{}, profile.Demographics{}, profile.ErrInvalidWeight
+	}
+	height, err := parsePositiveOptionalHundredths(input.Height)
+	if err != nil {
+		return habit.Input{}, profile.Demographics{}, profile.ErrInvalidHeight
+	}
+	value := habit.Input{Title: input.Title, Description: input.Description, GoalType: input.GoalType, TargetHundredths: target, Unit: input.Unit, CustomUnit: input.CustomUnit, Schedule: habit.Schedule{Weekdays: input.Weekdays, Time: input.Time, WeeklyTargetExecutions: input.WeeklyTargetExecutions, Reminder: input.Reminder}}
+	return value, profile.Demographics{Age: input.Age, WeightHundredths: weight, HeightHundredths: height, Gender: input.Gender}, nil
+}
+
+func (h *handler) createHabit(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	var request habitRequest
+	if decodeJSON(r, &request) != nil {
+		http.Error(w, "Dados do hábito inválidos.", http.StatusBadRequest)
+		return
+	}
+	input, demographics, err := request.domain()
+	if err == nil {
+		err = habit.Validate(habit.Normalize(input))
+	}
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	if _, err = h.profiles.UpdateDemographics(r.Context(), identity, demographics); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	value, err := h.habits.Create(r.Context(), identity, userProfile.Timezone, input)
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+func (h *handler) updateHabit(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	var request habitRequest
+	if decodeJSON(r, &request) != nil {
+		http.Error(w, "Dados do hábito inválidos.", http.StatusBadRequest)
+		return
+	}
+	input, demographics, err := request.domain()
+	if err == nil {
+		err = habit.Validate(habit.Normalize(input))
+	}
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	if _, err = h.habits.Get(r.Context(), identity, r.PathValue("id")); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	if _, err = h.profiles.UpdateDemographics(r.Context(), identity, demographics); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	value, err := h.habits.Update(r.Context(), identity, userProfile.Timezone, r.PathValue("id"), input)
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+func (h *handler) duplicateHabit(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err == nil {
+		var value habit.Habit
+		value, err = h.habits.Duplicate(r.Context(), identity, userProfile.Timezone, r.PathValue("id"))
+		if err == nil {
+			writeJSON(w, http.StatusCreated, value)
+			return
+		}
+	}
+	h.writeHabitError(w, err)
+}
+func (h *handler) archiveHabit(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	value, err := h.habits.Archive(r.Context(), identity, r.PathValue("id"))
+	if err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
+}
+func (h *handler) reactivateHabit(w http.ResponseWriter, r *http.Request) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err == nil {
+		var value habit.Habit
+		value, err = h.habits.Reactivate(r.Context(), identity, userProfile.Timezone, r.PathValue("id"))
+		if err == nil {
+			writeJSON(w, http.StatusOK, value)
+			return
+		}
+	}
+	h.writeHabitError(w, err)
+}
+func (h *handler) deleteHabit(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	if err := h.habits.Delete(r.Context(), identity, r.PathValue("id")); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *handler) writeHabitError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, habit.ErrNotFound):
+		http.Error(w, "Hábito não encontrado.", http.StatusNotFound)
+	case errors.Is(err, habit.ErrInvalidInput), errors.Is(err, habit.ErrInvalidGoal), errors.Is(err, habit.ErrInvalidSchedule), errors.Is(err, habit.ErrInvalidWeekly), errors.Is(err, habit.ErrInvalidUnit), errors.Is(err, habit.ErrInvalidReminder), errors.Is(err, habit.ErrInvalidTransition), errors.Is(err, profile.ErrInvalidAge), errors.Is(err, profile.ErrInvalidWeight), errors.Is(err, profile.ErrInvalidHeight), errors.Is(err, profile.ErrInvalidGender):
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+	default:
+		h.logger.Error("falha na operação de hábito", "error", err)
+		http.Error(w, "Não foi possível concluir a operação.", http.StatusInternalServerError)
+	}
+}
+
+func parseOptionalHundredths(value string) (int64, error) {
+	value = strings.TrimSpace(strings.ReplaceAll(value, ",", "."))
+	if value == "" {
+		return 0, nil
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) > 2 || parts[0] == "" {
+		return 0, habit.ErrInvalidGoal
+	}
+	if len(parts) == 2 && len(parts[1]) > 2 {
+		return 0, habit.ErrInvalidGoal
+	}
+	whole, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || whole < 0 {
+		return 0, habit.ErrInvalidGoal
+	}
+	fraction := int64(0)
+	if len(parts) == 2 {
+		fractionText := parts[1]
+		if len(fractionText) == 1 {
+			fractionText += "0"
+		}
+		if fractionText != "" {
+			fraction, err = strconv.ParseInt(fractionText, 10, 64)
+			if err != nil {
+				return 0, habit.ErrInvalidGoal
+			}
+		}
+	}
+	return whole*100 + fraction, nil
+}
+
+func parsePositiveOptionalHundredths(value string) (int64, error) {
+	trimmed := strings.TrimSpace(value)
+	parsed, err := parseOptionalHundredths(trimmed)
+	if err != nil || (trimmed != "" && parsed <= 0) {
+		return 0, habit.ErrInvalidGoal
+	}
+	return parsed, nil
+}
+
+func formatHundredths(value int64) string {
+	if value == 0 {
+		return ""
+	}
+	if value%100 == 0 {
+		return strconv.FormatInt(value/100, 10)
+	}
+	return strings.TrimRight(strings.TrimRight(fmt.Sprintf("%.2f", float64(value)/100), "0"), ".")
+}
+func unitLabel(value habit.Unit) string {
+	return map[habit.Unit]string{habit.UnitPages: "páginas", habit.UnitMinutes: "minutos", habit.UnitKilometers: "km", habit.UnitTimes: "vezes", habit.UnitLiters: "litros", habit.UnitOther: "Outra"}[value]
+}
+func weekdayLabel(value int) string {
+	return map[int]string{1: "Seg", 2: "Ter", 3: "Qua", 4: "Qui", 5: "Sex", 6: "Sáb", 7: "Dom"}[value]
+}
+func statusLabel(value habit.Status) string {
+	if value == habit.StatusArchived {
+		return "Arquivado"
+	}
+	return "Ativo"
+}
+func reminderLabel(value habit.ReminderChannel) string {
+	return map[habit.ReminderChannel]string{habit.ReminderNotification: "Notificação", habit.ReminderEmail: "E-mail", habit.ReminderBoth: "Ambos"}[value]
+}
+func hasWeekday(days []int, want int) bool {
+	for _, day := range days {
+		if day == want {
+			return true
+		}
+	}
+	return false
 }
 
 func (h *handler) serviceWorker(w http.ResponseWriter, r *http.Request) {

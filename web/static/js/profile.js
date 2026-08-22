@@ -19,7 +19,10 @@ if (form) {
         nickname: form.elements.nickname.value,
         age: Number(form.elements.age.value),
         timezone: form.elements.timezone.value,
-        rankingOptIn: form.elements.rankingOptIn.checked
+        rankingOptIn: form.elements.rankingOptIn.checked,
+        weight: form.elements.weight.value,
+        height: form.elements.height.value,
+        gender: form.elements.gender.value
       }, csrf);
       message.textContent = "Perfil atualizado.";
     } catch (error) {
@@ -29,4 +32,3 @@ if (form) {
     }
   });
 }
-

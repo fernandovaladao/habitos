@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
@@ -13,6 +14,7 @@ import (
 	"habitos/internal/auth"
 	"habitos/internal/config"
 	"habitos/internal/firebaseadmin"
+	"habitos/internal/habit"
 	"habitos/internal/profile"
 )
 
@@ -65,6 +67,103 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	}
 	if first.RankingOptIn || first.ProfileComplete {
 		t.Fatalf("perfil mínimo deveria ser privado e incompleto: %#v", first)
+	}
+
+	habitRepository := habit.NewFirestoreRepository(clients.Firestore)
+	habits := habit.NewService(habitRepository)
+	created, err := habits.Create(ctx, identity, "America/Sao_Paulo", habit.Input{
+		Title: "Ler", Description: "Ler diariamente", GoalType: habit.GoalQuantitative,
+		TargetHundredths: 2000, Unit: habit.UnitPages,
+		Schedule: habit.Schedule{Weekdays: []int{1, 3, 5}, Time: "19:00", WeeklyTargetExecutions: 3, Reminder: habit.ReminderNotification},
+	})
+	if err != nil {
+		t.Fatalf("criar hábito: %v", err)
+	}
+	t.Cleanup(func() { cleanupEmulatorHabits(t, clients, uid) })
+	if _, err := habits.Get(ctx, auth.Identity{UID: "outro-uid", Email: "outro@example.test"}, created.ID); !errors.Is(err, habit.ErrNotFound) {
+		t.Fatalf("outro usuário acessou hábito: %v", err)
+	}
+	if _, err := habits.Update(ctx, auth.Identity{UID: "outro-uid", Email: "outro@example.test"}, "America/Sao_Paulo", created.ID, habit.Input{Title: "Inválido", Description: "Não deve alterar", GoalType: habit.GoalSimple, Schedule: habit.Schedule{Weekdays: []int{1}, Time: "08:00", WeeklyTargetExecutions: 1, Reminder: habit.ReminderEmail}}); !errors.Is(err, habit.ErrNotFound) {
+		t.Fatalf("outro usuário alterou hábito: %v", err)
+	}
+	forged := created
+	forged.OwnerUID = "outro-uid"
+	forged.Title = "Alteração indevida"
+	if err := habitRepository.Update(ctx, forged, nil); !errors.Is(err, habit.ErrNotFound) {
+		t.Fatalf("repositório não repetiu autorização na mutação: %v", err)
+	}
+	updatedInput := habit.Input{Title: "Ler", Description: "Ler todos os dias", GoalType: habit.GoalQuantitative, TargetHundredths: 2500, Unit: habit.UnitPages, Schedule: habit.Schedule{Weekdays: []int{1, 2, 3, 4, 5}, Time: "20:00", WeeklyTargetExecutions: 5, Reminder: habit.ReminderBoth}}
+	updated, err := habits.Update(ctx, identity, "America/Sao_Paulo", created.ID, updatedInput)
+	if err != nil {
+		t.Fatalf("atualizar hábito: %v", err)
+	}
+	if !updated.ScheduleEffectiveAt.After(created.ScheduleEffectiveAt) {
+		t.Fatalf("nova agenda não ficou futura: criação=%v edição=%v", created.ScheduleEffectiveAt, updated.ScheduleEffectiveAt)
+	}
+	lastInput := updatedInput
+	lastInput.Schedule.Time = "21:30"
+	lastInput.Schedule.Reminder = habit.ReminderEmail
+	lastUpdated, err := habits.Update(ctx, identity, "America/Sao_Paulo", created.ID, lastInput)
+	if err != nil {
+		t.Fatalf("substituir agenda pendente: %v", err)
+	}
+	if lastUpdated.PendingScheduleVersionID != updated.PendingScheduleVersionID {
+		t.Fatalf("edição no mesmo dia criou outra versão pendente: primeira=%q última=%q", updated.PendingScheduleVersionID, lastUpdated.PendingScheduleVersionID)
+	}
+	versions, err := clients.Firestore.Collection("habits").Doc(created.ID).Collection("scheduleVersions").Documents(ctx).GetAll()
+	if err != nil || len(versions) != 2 {
+		t.Fatalf("snapshots de agenda=%d erro=%v", len(versions), err)
+	}
+	pendingSnapshot, err := clients.Firestore.Collection("habits").Doc(created.ID).Collection("scheduleVersions").Doc(lastUpdated.PendingScheduleVersionID).Get(ctx)
+	if err != nil {
+		t.Fatalf("ler versão pendente: %v", err)
+	}
+	var pending habit.ScheduleVersion
+	if err := pendingSnapshot.DataTo(&pending); err != nil || pending.Schedule.Time != "21:30" || pending.Schedule.Reminder != habit.ReminderEmail {
+		t.Fatalf("versão pendente não contém última edição: %#v erro=%v", pending, err)
+	}
+	archived, err := habits.Archive(ctx, identity, created.ID)
+	if err != nil || archived.Status != habit.StatusArchived {
+		t.Fatalf("arquivar=%#v erro=%v", archived, err)
+	}
+	if _, err := habits.Reactivate(ctx, identity, "America/Sao_Paulo", created.ID); err != nil {
+		t.Fatalf("reativar: %v", err)
+	}
+	duplicated, err := habits.Duplicate(ctx, identity, "America/Sao_Paulo", created.ID)
+	if err != nil || duplicated.ID == created.ID {
+		t.Fatalf("duplicar=%#v erro=%v", duplicated, err)
+	}
+	if duplicated.Schedule.Time != "21:30" || duplicated.PendingScheduleVersionID != "" || duplicated.PreviousSchedule != nil {
+		t.Fatalf("duplicação não usou a última agenda como inicial: %#v", duplicated)
+	}
+	if err := habits.Delete(ctx, identity, created.ID); err != nil {
+		t.Fatalf("excluir: %v", err)
+	}
+	if _, err := habits.Get(ctx, identity, created.ID); !errors.Is(err, habit.ErrNotFound) {
+		t.Fatalf("hábito excluído permaneceu acessível: %v", err)
+	}
+	listed, err := habits.List(ctx, identity, "America/Sao_Paulo", habit.FilterAll)
+	if err != nil || len(listed) != 1 || listed[0].ID != duplicated.ID {
+		t.Fatalf("listagem após CRUD=%#v erro=%v", listed, err)
+	}
+}
+
+func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid string) {
+	t.Helper()
+	ctx := context.Background()
+	docs, err := clients.Firestore.Collection("habits").Where("ownerUid", "==", uid).Documents(ctx).GetAll()
+	if err != nil {
+		t.Logf("limpeza de hábitos: %v", err)
+		return
+	}
+	for _, doc := range docs {
+		versions, versionErr := doc.Ref.Collection("scheduleVersions").Documents(ctx).GetAll()
+		if versionErr == nil {
+			for _, version := range versions {
+				_, _ = version.Ref.Delete(ctx)
+			}
+		}
+		_, _ = doc.Ref.Delete(ctx)
 	}
 }
 
