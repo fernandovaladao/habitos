@@ -2,8 +2,9 @@
 .gitignore
 .agents
 .codex
+.env
+.env.*
 docs
 README.md
 tmp
 coverage.out
-

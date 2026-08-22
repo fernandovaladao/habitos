@@ -27,14 +27,127 @@ A ERS é fonte de verdade para comportamento e regras de negócio. Os protótipo
 
 ## Fundação técnica atual
 
-Esta etapa contém somente a fundação do monólito modular: servidor HTTP em Go, templates renderizados no servidor, assets incorporados ao binário, navegação básica, PWA estática e endpoint de saúde. Firebase, Firestore, hábitos, pontuação, ranking, notificações e IA ainda não estão integrados.
+O projeto contém a fundação do monólito modular e a fase de autenticação/perfil mínimo: Firebase Authentication, sessão HttpOnly validada pelo backend, perfil Firestore, navegação básica, PWA estática e endpoint de saúde. Hábitos, pontuação, ranking, notificações e IA ainda não estão implementados.
 
 ## Requisitos locais
 
-- Go 1.24 ou superior.
+- Go 1.25 ou superior.
 - Docker, opcional, para validar a imagem de produção.
+- Um projeto Firebase com autenticação por e-mail/senha e Firestore, ou Firebase Emulator Suite.
+- Node.js e Firebase CLI para executar o Emulator Suite.
+- Java 21 ou superior para o Firestore Emulator.
 
-O projeto usa apenas a biblioteca padrão do Go nesta etapa.
+Verifique a versão do Java antes de iniciar os emuladores:
+
+```bash
+java -version
+```
+
+A saída deve indicar a versão 21 ou posterior.
+
+## Configuração Firebase
+
+Copie `.env.example` para um arquivo local não versionado e exporte as variáveis no shell. O aplicativo não carrega `.env` automaticamente.
+
+```bash
+set -a
+. ./.env
+set +a
+```
+
+Variáveis obrigatórias:
+
+- `FIREBASE_PROJECT_ID`
+- `FIREBASE_WEB_API_KEY`
+- `FIREBASE_AUTH_DOMAIN`
+- `FIREBASE_APP_ID`
+
+`FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN` e `FIREBASE_APP_ID` são configuração pública do Firebase Web SDK, não credenciais administrativas. A configuração administrativa permanece somente no backend.
+
+No Cloud Run, use Application Default Credentials concedendo à identidade do serviço apenas as permissões necessárias. Não envie nem monte arquivos de service account no repositório ou no frontend.
+
+Para desenvolvimento com emuladores, defina:
+
+```bash
+export FIREBASE_PROJECT_ID=demo-habitos-local
+export GCLOUD_PROJECT=demo-habitos-local
+export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
+export FIRESTORE_EMULATOR_HOST=127.0.0.1:8081
+```
+
+O host do Auth Emulator não deve conter `http://`. O backend e a configuração pública entregue ao browser são ajustados automaticamente. Quando um emulador está configurado, o backend rejeita qualquer project ID diferente de `demo-habitos-local`. Fora dos emuladores, o SDK usa Application Default Credentials; localmente, `GOOGLE_APPLICATION_CREDENTIALS` pode apontar para um arquivo mantido fora do repositório.
+
+### Teste local ponta a ponta com emuladores
+
+O arquivo `.firebaserc` usa exclusivamente o projeto fictício `demo-habitos-local`. Esse identificador com prefixo `demo-` é local e não representa um projeto Firebase real.
+
+As portas configuradas em `firebase.json` são:
+
+- Authentication Emulator: `127.0.0.1:9099`
+- Firestore Emulator: `127.0.0.1:8081`
+- Emulator Suite UI: `127.0.0.1:4000`
+- Backend HÁBITOS: `127.0.0.1:8080`
+
+No primeiro terminal, inicie somente Authentication e Firestore:
+
+```bash
+npx firebase-tools@15.25.1 emulators:start \
+  --project demo-habitos-local \
+  --only auth,firestore
+```
+
+Se o Firebase CLI já estiver instalado globalmente:
+
+```bash
+firebase emulators:start \
+  --project demo-habitos-local \
+  --only auth,firestore
+```
+
+No segundo terminal, copie e carregue a configuração local e inicie o backend:
+
+```bash
+cp .env.example .env
+set -a
+. ./.env
+set +a
+go run ./cmd/web
+```
+
+Não defina `GOOGLE_APPLICATION_CREDENTIALS` nesse fluxo. O Admin SDK recebe explicitamente `demo-habitos-local`, o Auth Emulator recebe o mesmo valor por `GCLOUD_PROJECT` e o Firestore usa `FIRESTORE_EMULATOR_HOST`.
+
+O frontend consulta `/api/firebase-config`. Quando `FIREBASE_AUTH_EMULATOR_HOST` está definido, a resposta inclui `authEmulatorUrl=http://127.0.0.1:9099`, e o Firebase Web SDK chama `connectAuthEmulator` antes de autenticar.
+
+O frontend não carrega o SDK do Firestore. `firestore.rules` nega todas as leituras e escritas diretas de clientes; somente o backend administrativo acessa o Firestore Emulator.
+
+Abra [http://localhost:8080/cadastro](http://localhost:8080/cadastro) para testar cadastro, sessão e perfil. A interface dos emuladores fica em [http://localhost:4000](http://localhost:4000).
+
+### Teste de integração opt-in
+
+O teste comum não depende de emuladores:
+
+```bash
+go test ./...
+```
+
+Com os emuladores ativos e as variáveis de `.env` carregadas, execute o teste ponta a ponta explicitamente:
+
+```bash
+RUN_FIREBASE_EMULATOR_TESTS=1 go test -v ./tests/integration
+```
+
+Também é possível deixar o Firebase CLI iniciar e encerrar os emuladores ao redor do teste:
+
+```bash
+npx firebase-tools@15.25.1 emulators:exec \
+  --project demo-habitos-local \
+  --only auth,firestore \
+  "RUN_FIREBASE_EMULATOR_TESTS=1 go test -v ./tests/integration"
+```
+
+O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade e confirma a criação idempotente do perfil no Firestore Emulator.
+
+`APP_ENV=production` torna o cookie de sessão obrigatoriamente seguro. Em desenvolvimento HTTP, use `SESSION_COOKIE_SECURE=false`. Sessões duram 5 dias.
 
 ## Executar localmente
 
@@ -49,6 +162,14 @@ PORT=3000 go run ./cmd/web
 ```
 
 Acesse [http://localhost:8080](http://localhost:8080) e verifique a saúde em [http://localhost:8080/health](http://localhost:8080/health).
+
+Rotas da fase de autenticação:
+
+- `/cadastro`
+- `/entrar`
+- `/recuperar-senha`
+- `/perfil` — protegida
+- `/alterar-senha` — protegida
 
 ## Testes
 

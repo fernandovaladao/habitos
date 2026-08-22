@@ -1,0 +1,38 @@
+{{define "profile"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="page-shell profile-shell">
+    <section class="card profile-card">
+      <div class="profile-heading">
+        <div class="profile-avatar" aria-hidden="true">●</div>
+        <div><p class="eyebrow">Perfil básico</p><h1>{{if .Profile.Nickname}}{{.Profile.Nickname}}{{else}}Complete seu perfil{{end}}</h1><p>{{.Email}}</p></div>
+      </div>
+      {{if not .Profile.ProfileComplete}}<div class="notice">Informe um apelido e uma idade válidos para concluir seu perfil.</div>{{end}}
+      <form data-profile-form>
+        <label for="nickname">Apelido</label>
+        <input id="nickname" name="nickname" type="text" minlength="3" maxlength="24" value="{{.Profile.Nickname}}" required aria-describedby="nickname-help">
+        <small id="nickname-help">3–24 caracteres: letras, números, espaços, _ ou -.</small>
+        <label for="age">Idade</label>
+        <input id="age" name="age" type="number" min="1" step="1" value="{{if gt .Profile.Age 0}}{{.Profile.Age}}{{end}}" required>
+        <label for="timezone">Timezone</label>
+        <input id="timezone" name="timezone" type="text" value="{{.Profile.Timezone}}" required aria-describedby="timezone-help">
+        <small id="timezone-help">Use um identificador IANA, como America/Sao_Paulo.</small>
+        <label class="checkbox-row" for="ranking-opt-in">
+          <input id="ranking-opt-in" name="rankingOptIn" type="checkbox" {{if .Profile.RankingOptIn}}checked{{end}}>
+          Quero participar publicamente do ranking geral quando ele estiver disponível.
+        </label>
+        <p class="form-message" data-form-message role="status" aria-live="polite"></p>
+        <button class="button button--primary" type="submit">Salvar perfil</button>
+      </form>
+      <div class="form-links"><a href="/alterar-senha">Alterar senha</a></div>
+    </section>
+  </main>
+  {{template "navigation" .}}
+  <script type="module" src="/static/js/profile.js"></script>
+</body>
+</html>
+{{end}}
+

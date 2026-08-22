@@ -38,6 +38,19 @@ a { color: inherit; }
   border-bottom: 1px solid var(--border);
 }
 
+.header-content {
+  width: min(1120px, 100%);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.account-nav { display: flex; align-items: center; gap: 16px; font-weight: 700; }
+.account-nav a, .link-button { color: var(--blue-700); text-decoration: none; }
+.account-nav__signup { padding: 8px 13px; border: 2px solid var(--orange-500); border-radius: 10px; }
+.link-button { padding: 0; border: 0; background: transparent; font: inherit; cursor: pointer; }
+
 .brand {
   display: inline-flex;
   align-items: center;
@@ -133,6 +146,44 @@ p { color: var(--muted); font-size: 1.05rem; }
 .empty-state h1 { font-size: clamp(2rem, 5vw, 3rem); }
 .empty-state__mark { display: inline-grid; width: 60px; height: 60px; margin-bottom: 20px; place-items: center; color: var(--orange-500); background: var(--orange-100); border-radius: 50%; }
 
+.auth-shell {
+  min-height: calc(100vh - 76px);
+  display: grid;
+  place-items: center;
+  padding: 32px 16px;
+}
+
+.form-card { width: min(520px, 100%); padding: clamp(28px, 6vw, 52px); }
+.form-card h1, .profile-card h1 { font-size: clamp(2rem, 5vw, 2.8rem); }
+.form-card form, .profile-card form { display: grid; gap: 9px; }
+.form-card label, .profile-card label { margin-top: 8px; font-weight: 750; }
+.form-card input, .profile-card input[type="text"], .profile-card input[type="number"] {
+  width: 100%;
+  min-height: 48px;
+  padding: 11px 13px;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid #b9c9de;
+  border-radius: 11px;
+  font: inherit;
+}
+.form-card input:focus, .profile-card input:focus { outline: 3px solid rgb(21 89 170 / 20%); border-color: var(--blue-700); }
+.form-card small, .profile-card small { color: var(--muted); }
+.form-card .button, .profile-card .button { width: 100%; border: 0; cursor: pointer; }
+.button:disabled { cursor: wait; opacity: .65; }
+.form-message { min-height: 1.5em; margin: 8px 0 0; color: var(--blue-700); font-size: .92rem; font-weight: 650; }
+.form-links { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 14px; margin-top: 22px; }
+.form-links a { color: var(--blue-700); font-weight: 700; }
+
+.profile-shell { max-width: 780px; }
+.profile-card { padding: clamp(26px, 6vw, 52px); }
+.profile-heading { display: flex; align-items: center; gap: 20px; margin-bottom: 28px; }
+.profile-heading h1, .profile-heading p { margin-bottom: 4px; }
+.profile-avatar { width: 76px; height: 76px; flex: 0 0 auto; display: grid; place-items: center; color: var(--blue-700); background: var(--blue-100); border-radius: 50%; }
+.notice { margin-bottom: 22px; padding: 14px 16px; color: #7a3b00; background: var(--orange-100); border-left: 4px solid var(--orange-500); border-radius: 8px; }
+.checkbox-row { display: flex; align-items: flex-start; gap: 10px; margin: 16px 0 8px; }
+.checkbox-row input { width: 20px; height: 20px; flex: 0 0 auto; accent-color: var(--blue-700); }
+
 .main-nav {
   position: fixed;
   z-index: 10;
@@ -174,9 +225,10 @@ p { color: var(--muted); font-size: 1.05rem; }
   .hero { padding: 26px 20px; }
   .feature-grid { grid-template-columns: 1fr; }
   .feature { min-height: auto; }
+  .account-nav__signup { display: none; }
+  .profile-heading { align-items: flex-start; }
 }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { scroll-behavior: auto !important; transition: none !important; }
 }
-

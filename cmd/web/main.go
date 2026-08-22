@@ -10,14 +10,48 @@ import (
 	"syscall"
 	"time"
 
+	"habitos/internal/auth"
+	"habitos/internal/config"
+	"habitos/internal/firebaseadmin"
 	"habitos/internal/httpserver"
+	"habitos/internal/profile"
 )
 
 func main() {
 	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+	appConfig, err := config.Load()
+	if err != nil {
+		logger.Error("configuração inválida", "error", err)
+		os.Exit(1)
+	}
+
+	clients, err := firebaseadmin.New(context.Background(), appConfig.FirebaseProjectID)
+	if err != nil {
+		logger.Error("falha ao inicializar serviços Firebase", "error", err)
+		os.Exit(1)
+	}
+	defer func() {
+		if err := clients.Close(); err != nil {
+			logger.Error("falha ao fechar Firestore", "error", err)
+		}
+	}()
+
+	sessions := auth.NewFirebaseSessionManager(clients.Auth)
+	profiles := profile.NewService(profile.NewFirestoreRepository(clients.Firestore))
 	server, err := httpserver.New(httpserver.Config{
-		Port:   envOrDefault("PORT", "8080"),
-		Logger: logger,
+		Port:          appConfig.Port,
+		Logger:        logger,
+		SecureCookies: appConfig.SecureCookies,
+		FirebaseWeb: httpserver.FirebaseWebConfig{
+			APIKey:          appConfig.FirebaseWebAPIKey,
+			AuthDomain:      appConfig.FirebaseAuthDomain,
+			ProjectID:       appConfig.FirebaseProjectID,
+			AppID:           appConfig.FirebaseAppID,
+			AuthEmulatorURL: appConfig.AuthEmulatorURL,
+		},
+	}, httpserver.Dependencies{
+		Sessions: sessions,
+		Profiles: profiles,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)
@@ -48,11 +82,4 @@ func main() {
 		}
 		logger.Info("servidor encerrado")
 	}
-}
-
-func envOrDefault(name, fallback string) string {
-	if value := os.Getenv(name); value != "" {
-		return value
-	}
-	return fallback
 }

@@ -1,0 +1,86 @@
+package profile
+
+import (
+	"context"
+	"errors"
+	"time"
+
+	"habitos/internal/auth"
+)
+
+var ErrNotFound = errors.New("perfil não encontrado")
+
+type Profile struct {
+	UID             string    `firestore:"id" json:"uid"`
+	Email           string    `firestore:"email" json:"email"`
+	Nickname        string    `firestore:"nickname" json:"nickname"`
+	Age             int       `firestore:"age" json:"age"`
+	Timezone        string    `firestore:"timezone" json:"timezone"`
+	RankingOptIn    bool      `firestore:"rankingOptIn" json:"rankingOptIn"`
+	ProfileComplete bool      `firestore:"profileComplete" json:"profileComplete"`
+	CreatedAt       time.Time `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt       time.Time `firestore:"updatedAt" json:"updatedAt"`
+}
+
+type Update struct {
+	Nickname     string
+	Age          int
+	Timezone     string
+	RankingOptIn bool
+}
+
+type Repository interface {
+	Ensure(ctx context.Context, candidate Profile) (Profile, error)
+	Get(ctx context.Context, uid string) (Profile, error)
+	Update(ctx context.Context, uid string, update Update, updatedAt time.Time) (Profile, error)
+}
+
+type Service struct {
+	repository Repository
+	now        func() time.Time
+}
+
+func NewService(repository Repository) *Service {
+	return &Service{repository: repository, now: time.Now}
+}
+
+func (s *Service) EnsureProfile(ctx context.Context, identity auth.Identity, timezone string) (Profile, error) {
+	if identity.UID == "" || identity.Email == "" {
+		return Profile{}, auth.ErrInvalidSession
+	}
+	if ValidateTimezone(timezone) != nil {
+		timezone = "UTC"
+	}
+	now := normalizeFirestoreTimestamp(s.now())
+	return s.repository.Ensure(ctx, Profile{
+		UID:             identity.UID,
+		Email:           identity.Email,
+		Timezone:        timezone,
+		RankingOptIn:    false,
+		ProfileComplete: false,
+		CreatedAt:       now,
+		UpdatedAt:       now,
+	})
+}
+
+func (s *Service) Get(ctx context.Context, identity auth.Identity) (Profile, error) {
+	if identity.UID == "" || identity.Email == "" {
+		return Profile{}, auth.ErrInvalidSession
+	}
+	return s.repository.Get(ctx, identity.UID)
+}
+
+func (s *Service) Update(ctx context.Context, identity auth.Identity, update Update) (Profile, error) {
+	if identity.UID == "" || identity.Email == "" {
+		return Profile{}, auth.ErrInvalidSession
+	}
+	update.Nickname = NormalizeNickname(update.Nickname)
+	if err := ValidateUpdate(update); err != nil {
+		return Profile{}, err
+	}
+	return s.repository.Update(ctx, identity.UID, update, normalizeFirestoreTimestamp(s.now()))
+}
+
+func normalizeFirestoreTimestamp(value time.Time) time.Time {
+	return value.UTC().Truncate(time.Microsecond)
+}

@@ -1,0 +1,31 @@
+{{define "signup"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="auth-shell">
+    <section class="card form-card">
+      <p class="eyebrow">Comece sua jornada</p>
+      <h1>Criar conta</h1>
+      <form data-auth-form="signup">
+        <label for="nickname">Apelido</label>
+        <input id="nickname" name="nickname" type="text" minlength="3" maxlength="24" autocomplete="nickname" required aria-describedby="nickname-help">
+        <small id="nickname-help">3–24 caracteres: letras, números, espaços, _ ou -.</small>
+        <label for="age">Idade</label>
+        <input id="age" name="age" type="number" min="1" step="1" inputmode="numeric" required>
+        <label for="email">E-mail</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <label for="password">Senha</label>
+        <input id="password" name="password" type="password" minlength="6" autocomplete="new-password" required>
+        <input name="timezone" type="hidden">
+        <p class="form-message" data-form-message role="status" aria-live="polite"></p>
+        <button class="button button--primary" type="submit">Criar minha conta</button>
+      </form>
+      <div class="form-links"><a href="/entrar">Já tenho uma conta</a></div>
+    </section>
+  </main>
+  <script type="module" src="/static/js/auth.js"></script>
+</body>
+</html>
+{{end}}

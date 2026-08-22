@@ -15,3 +15,8 @@ coverage.out
 .vscode/
 .DS_Store
 
+# Firebase Emulator Suite
+.firebase/
+firebase-debug.log
+firestore-debug.log
+ui-debug.log

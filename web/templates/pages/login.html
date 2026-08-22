@@ -1,0 +1,26 @@
+{{define "login"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="auth-shell">
+    <section class="card form-card">
+      <p class="eyebrow">Bem-vindo de volta</p>
+      <h1>Entrar</h1>
+      <form data-auth-form="login">
+        <label for="email">E-mail</label>
+        <input id="email" name="email" type="email" autocomplete="email" required>
+        <label for="password">Senha</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+        <p class="form-message" data-form-message role="status" aria-live="polite"></p>
+        <button class="button button--primary" type="submit">Entrar</button>
+      </form>
+      <div class="form-links"><a href="/recuperar-senha">Esqueci minha senha</a><a href="/cadastro">Criar conta</a></div>
+    </section>
+  </main>
+  <script type="module" src="/static/js/auth.js"></script>
+</body>
+</html>
+{{end}}
+

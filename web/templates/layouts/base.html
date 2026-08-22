@@ -9,13 +9,24 @@
   <link rel="icon" href="/static/icons/icon.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/static/css/app.css">
   <script src="/static/js/app.js" defer></script>
+  {{if .Authenticated}}<script type="module" src="/static/js/session-actions.js"></script>{{end}}
 </head>
 {{end}}
 
 {{define "brand"}}
-<a class="brand" href="/" aria-label="HÁBITOS — página inicial">
-  <span class="brand__mark" aria-hidden="true"></span>
-  <span>HÁBITOS</span>
-</a>
+<div class="header-content">
+  <a class="brand" href="/" aria-label="HÁBITOS — página inicial">
+    <span class="brand__mark" aria-hidden="true"></span>
+    <span>HÁBITOS</span>
+  </a>
+  <div class="account-nav">
+    {{if .Authenticated}}
+      <a href="/perfil">Perfil</a>
+      <button type="button" class="link-button" data-logout>Sair</button>
+    {{else}}
+      <a href="/entrar">Entrar</a>
+      <a class="account-nav__signup" href="/cadastro">Criar conta</a>
+    {{end}}
+  </div>
+</div>
 {{end}}
-

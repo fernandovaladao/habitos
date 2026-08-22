@@ -2,6 +2,11 @@ const CACHE_NAME = "habitos-static-v1";
 const STATIC_ASSETS = [
   "/static/css/app.css",
   "/static/js/app.js",
+  "/static/js/firebase-client.js",
+  "/static/js/auth.js",
+  "/static/js/profile.js",
+  "/static/js/password.js",
+  "/static/js/session-actions.js",
   "/static/icons/icon.svg",
   "/static/manifest.webmanifest"
 ];
@@ -28,4 +33,3 @@ self.addEventListener("fetch", (event) => {
     caches.match(event.request).then((cached) => cached || fetch(event.request))
   );
 });
-

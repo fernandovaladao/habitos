@@ -1,0 +1,11 @@
+{{define "error"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="auth-shell"><section class="card form-card"><h1>{{.Title}}</h1><p>{{.Description}}</p><a class="button button--secondary" href="/">Voltar ao início</a></section></main>
+</body>
+</html>
+{{end}}
+
