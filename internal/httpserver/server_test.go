@@ -15,7 +15,9 @@ import (
 
 	"habitos/internal/auth"
 	"habitos/internal/csrf"
+	"habitos/internal/execution"
 	"habitos/internal/habit"
+	"habitos/internal/note"
 	"habitos/internal/profile"
 )
 
@@ -98,16 +100,133 @@ func (r *fakeProfileRepository) UpdateDemographics(_ context.Context, uid string
 }
 
 type testApp struct {
-	handler  http.Handler
-	sessions *fakeSessionManager
-	profiles *fakeProfileRepository
-	habits   *fakeHabitRepository
+	handler    http.Handler
+	sessions   *fakeSessionManager
+	profiles   *fakeProfileRepository
+	habits     *fakeHabitRepository
+	executions *fakeExecutionRepository
+	notes      *fakeNoteRepository
 }
 
 type fakeHabitRepository struct {
 	values   map[string]habit.Habit
 	versions map[string][]habit.ScheduleVersion
 	next     int
+}
+
+type fakeExecutionRepository struct {
+	values  map[string]execution.Execution
+	keys    map[string]string
+	cursors map[string]string
+	next    int
+}
+
+func newFakeExecutionRepository() *fakeExecutionRepository {
+	return &fakeExecutionRepository{values: map[string]execution.Execution{}, keys: map[string]string{}, cursors: map[string]string{}}
+}
+func (r *fakeExecutionRepository) NewID() string {
+	r.next++
+	return fmt.Sprintf("execution-%d", r.next)
+}
+func (r *fakeExecutionRepository) Ensure(_ context.Context, v execution.Execution, key string) (execution.Execution, error) {
+	if id, ok := r.keys[key]; ok {
+		return r.values[id], nil
+	}
+	r.keys[key] = v.ID
+	r.values[v.ID] = v
+	return v, nil
+}
+func (r *fakeExecutionRepository) Get(_ context.Context, uid, id string) (execution.Execution, error) {
+	v, ok := r.values[id]
+	if !ok || v.OwnerUID != uid {
+		return execution.Execution{}, execution.ErrNotFound
+	}
+	return v, nil
+}
+func (r *fakeExecutionRepository) ListByHabit(_ context.Context, uid, hid, before string, limit int) ([]execution.Execution, error) {
+	var out []execution.Execution
+	for _, v := range r.values {
+		if v.OwnerUID == uid && v.HabitID == hid && (before == "" || v.ScheduledDate < before) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (r *fakeExecutionRepository) ApplyResult(_ context.Context, uid, id string, status execution.Status, achieved int64, now time.Time) (execution.Execution, error) {
+	v, err := r.Get(context.Background(), uid, id)
+	if err != nil {
+		return execution.Execution{}, err
+	}
+	if v.ClosedAt != nil || !now.Before(v.RegistrationDeadline) {
+		return execution.Execution{}, execution.ErrClosed
+	}
+	v.Status = status
+	v.AchievedHundredths = achieved
+	if status == execution.StatusNotDone {
+		v.PerformedAt = nil
+	} else if v.PerformedAt == nil {
+		v.PerformedAt = &now
+	}
+	v.UpdatedAt = now
+	r.values[id] = v
+	return v, nil
+}
+func (r *fakeExecutionRepository) CloseExpired(_ context.Context, uid, hid string, now time.Time) error {
+	return nil
+}
+func (r *fakeExecutionRepository) Cursor(_ context.Context, uid, hid string) (string, error) {
+	return r.cursors[uid+hid], nil
+}
+func (r *fakeExecutionRepository) AdvanceCursor(_ context.Context, uid, hid, date string, _ time.Time) error {
+	r.cursors[uid+hid] = date
+	return nil
+}
+
+type fakeNoteRepository struct {
+	values map[string]note.Note
+	next   int
+}
+
+func newFakeNoteRepository() *fakeNoteRepository {
+	return &fakeNoteRepository{values: map[string]note.Note{}}
+}
+func (r *fakeNoteRepository) NewID() string { r.next++; return fmt.Sprintf("note-%d", r.next) }
+func (r *fakeNoteRepository) Create(_ context.Context, v note.Note) (note.Note, error) {
+	r.values[v.ID] = v
+	return v, nil
+}
+func (r *fakeNoteRepository) Get(_ context.Context, uid, id string) (note.Note, error) {
+	v, ok := r.values[id]
+	if !ok || v.OwnerUID != uid {
+		return note.Note{}, note.ErrNotFound
+	}
+	return v, nil
+}
+func (r *fakeNoteRepository) ListByHabit(_ context.Context, uid, hid string) ([]note.Note, error) {
+	var out []note.Note
+	for _, v := range r.values {
+		if v.OwnerUID == uid && v.HabitID == hid {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (r *fakeNoteRepository) Update(_ context.Context, uid, id, content string, now time.Time) (note.Note, error) {
+	v, err := r.Get(context.Background(), uid, id)
+	if err != nil {
+		return note.Note{}, err
+	}
+	v.Content = content
+	v.UpdatedAt = now
+	r.values[id] = v
+	return v, nil
+}
+func (r *fakeNoteRepository) Delete(_ context.Context, uid, id string) error {
+	if _, err := r.Get(context.Background(), uid, id); err != nil {
+		return err
+	}
+	delete(r.values, id)
+	return nil
 }
 
 func newFakeHabitRepository() *fakeHabitRepository {
@@ -134,6 +253,12 @@ func (r *fakeHabitRepository) List(_ context.Context, uid string) ([]habit.Habit
 		}
 	}
 	return values, nil
+}
+func (r *fakeHabitRepository) ListScheduleVersions(_ context.Context, uid, id string) ([]habit.ScheduleVersion, error) {
+	if _, err := r.Get(context.Background(), uid, id); err != nil {
+		return nil, err
+	}
+	return append([]habit.ScheduleVersion(nil), r.versions[id]...), nil
 }
 func (r *fakeHabitRepository) Update(_ context.Context, value habit.Habit, version *habit.ScheduleVersion) error {
 	persisted, ok := r.values[value.ID]
@@ -162,14 +287,64 @@ func newTestApp(t *testing.T) testApp {
 	sessions := &fakeSessionManager{identity: auth.Identity{UID: "firebase-user-a", Email: "a@example.com"}}
 	profiles := newFakeProfileRepository()
 	habits := newFakeHabitRepository()
+	executionRepo := newFakeExecutionRepository()
+	executionService := execution.NewService(executionRepo)
+	habitService := habit.NewService(habits)
+	noteRepo := newFakeNoteRepository()
+	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habit.NewService(habits)})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo}
+}
+
+func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
+	app := newTestApp(t)
+	deadline := time.Now().Add(time.Hour)
+	app.executions.values["execution-b"] = execution.Execution{ID: "execution-b", OwnerUID: "firebase-user-b", HabitID: "habit-b", GoalTypeSnapshot: habit.GoalSimple, Status: execution.StatusPending, RegistrationDeadline: deadline}
+	app.notes.values["note-b"] = note.Note{ID: "note-b", OwnerUID: "firebase-user-b", HabitID: "habit-b", Content: "privada"}
+	token, cookie := issueCSRF(t, app.handler)
+	session := &http.Cookie{Name: auth.SessionCookieName, Value: "valid"}
+	for _, item := range []struct{ method, path, body string }{{"POST", "/api/executions/execution-b/simple", `{"completed":true}`}, {"PUT", "/api/notes/note-b", `{"content":"invadir"}`}, {"DELETE", "/api/notes/note-b", `{}`}} {
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(item.method, item.path, strings.NewReader(item.body))
+		request.Header.Set(csrf.HeaderName, token)
+		request.AddCookie(cookie)
+		request.AddCookie(session)
+		app.handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusNotFound {
+			t.Fatalf("%s %s status=%d", item.method, item.path, recorder.Code)
+		}
+	}
+	if app.notes.values["note-b"].Content != "privada" || app.executions.values["execution-b"].Status != execution.StatusPending {
+		t.Fatal("dados de outro usuário foram alterados")
+	}
+}
+
+func TestHabitDetailsSynchronizesBeforeReturningHistory(t *testing.T) {
+	app := newTestApp(t)
+	today := todayIn("UTC")
+	app.habits.values["habit-a"] = habit.Habit{ID: "habit-a", OwnerUID: "firebase-user-a", Title: "Diário", Description: "Teste", Status: habit.StatusActive, ScheduleEffectiveDate: today, OccurrencesResumeDate: today}
+	app.habits.versions["habit-a"] = []habit.ScheduleVersion{{ID: "version-a", HabitID: "habit-a", OwnerUID: "firebase-user-a", EffectiveDate: today, GoalType: habit.GoalSimple, Schedule: habit.Schedule{Weekdays: []int{1, 2, 3, 4, 5, 6, 7}, Time: "08:00", WeeklyTargetExecutions: 7, Reminder: habit.ReminderNotification}}}
+	request := httptest.NewRequest(http.MethodGet, "/habitos/habit-a", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+	if len(app.executions.values) != 1 {
+		t.Fatalf("histórico retornado sem sincronizar: execuções=%d", len(app.executions.values))
+	}
+	for _, value := range app.executions.values {
+		if value.ScheduledDate != today {
+			t.Fatalf("data materializada=%q", value.ScheduledDate)
+		}
+	}
 }
 
 func TestHabitCreationAndListingUseAuthenticatedUID(t *testing.T) {

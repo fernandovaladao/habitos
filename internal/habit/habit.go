@@ -58,12 +58,17 @@ type Schedule struct {
 }
 
 type ScheduleVersion struct {
-	ID          string    `firestore:"id" json:"id"`
-	HabitID     string    `firestore:"habitId" json:"habitId"`
-	OwnerUID    string    `firestore:"ownerUid" json:"-"`
-	Schedule    Schedule  `firestore:"schedule" json:"schedule"`
-	EffectiveAt time.Time `firestore:"effectiveAt" json:"effectiveAt"`
-	CreatedAt   time.Time `firestore:"createdAt" json:"createdAt"`
+	ID               string    `firestore:"id" json:"id"`
+	HabitID          string    `firestore:"habitId" json:"habitId"`
+	OwnerUID         string    `firestore:"ownerUid" json:"-"`
+	Schedule         Schedule  `firestore:"schedule" json:"schedule"`
+	GoalType         GoalType  `firestore:"goalType" json:"goalType"`
+	TargetHundredths int64     `firestore:"targetHundredths" json:"targetHundredths"`
+	Unit             Unit      `firestore:"unit" json:"unit"`
+	CustomUnit       string    `firestore:"customUnit" json:"customUnit"`
+	EffectiveDate    string    `firestore:"effectiveDate" json:"effectiveDate"`
+	EffectiveAt      time.Time `firestore:"effectiveAt" json:"effectiveAt"`
+	CreatedAt        time.Time `firestore:"createdAt" json:"createdAt"`
 }
 
 type Habit struct {
@@ -79,8 +84,10 @@ type Habit struct {
 	Schedule                 Schedule   `firestore:"schedule" json:"schedule"`
 	PreviousSchedule         *Schedule  `firestore:"previousSchedule,omitempty" json:"previousSchedule,omitempty"`
 	ScheduleEffectiveAt      time.Time  `firestore:"scheduleEffectiveAt" json:"scheduleEffectiveAt"`
+	ScheduleEffectiveDate    string     `firestore:"scheduleEffectiveDate" json:"scheduleEffectiveDate"`
 	PendingScheduleVersionID string     `firestore:"pendingScheduleVersionId,omitempty" json:"-"`
 	OccurrencesResumeAt      time.Time  `firestore:"occurrencesResumeAt,omitempty" json:"occurrencesResumeAt,omitempty"`
+	OccurrencesResumeDate    string     `firestore:"occurrencesResumeDate" json:"occurrencesResumeDate"`
 	CreatedAt                time.Time  `firestore:"createdAt" json:"createdAt"`
 	UpdatedAt                time.Time  `firestore:"updatedAt" json:"updatedAt"`
 	ArchivedAt               *time.Time `firestore:"archivedAt,omitempty" json:"archivedAt,omitempty"`
@@ -112,10 +119,18 @@ type Repository interface {
 	Get(ctx context.Context, ownerUID, id string) (Habit, error)
 	List(ctx context.Context, ownerUID string) ([]Habit, error)
 	Update(ctx context.Context, value Habit, version *ScheduleVersion) error
+	ListScheduleVersions(ctx context.Context, ownerUID, habitID string) ([]ScheduleVersion, error)
 }
 
 func (h Habit) EffectiveSchedule(at time.Time) Schedule {
 	if h.PreviousSchedule != nil && at.Before(h.ScheduleEffectiveAt) {
+		return *h.PreviousSchedule
+	}
+	return h.Schedule
+}
+
+func (h Habit) EffectiveScheduleForDate(date string) Schedule {
+	if h.PreviousSchedule != nil && date < h.ScheduleEffectiveDate {
 		return *h.PreviousSchedule
 	}
 	return h.Schedule

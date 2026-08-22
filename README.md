@@ -27,7 +27,7 @@ A ERS é fonte de verdade para comportamento e regras de negócio. Os protótipo
 
 ## Fundação técnica atual
 
-O projeto contém a fundação do monólito modular, autenticação e perfil, além da gestão de hábitos com persistência Firestore, versionamento de agenda, arquivamento, reativação, duplicação e exclusão lógica. Execuções, pontuação, sequência, conquistas, ranking, envio real de notificações e IA ainda não estão implementados.
+O projeto contém a fundação do monólito modular, autenticação e perfil, gestão de hábitos e execuções com histórico e notas privadas. Ocorrências são materializadas e fechadas sob demanda, com snapshots temporais e idempotência no Firestore. Pontuação, sequência, conquistas, ranking, envio real de notificações e IA ainda não estão implementados.
 
 ## Requisitos locais
 
@@ -145,7 +145,7 @@ npx firebase-tools@15.25.1 emulators:exec \
   "RUN_FIREBASE_EMULATOR_TESTS=1 go test -v ./tests/integration"
 ```
 
-O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade, confirma a criação idempotente do perfil e testa CRUD, autorização e versionamento de agenda de hábitos no Firestore Emulator.
+O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade e testa perfil, hábitos, versionamento de agenda, materialização e registro concorrentes de execuções e CRUD autorizado de notas no Firestore Emulator.
 
 `APP_ENV=production` torna o cookie de sessão obrigatoriamente seguro. Em desenvolvimento HTTP, use `SESSION_COOKIE_SECURE=false`. Sessões duram 5 dias.
 

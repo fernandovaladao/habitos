@@ -8,13 +8,16 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sync"
 	"testing"
 	"time"
 
 	"habitos/internal/auth"
 	"habitos/internal/config"
+	"habitos/internal/execution"
 	"habitos/internal/firebaseadmin"
 	"habitos/internal/habit"
+	"habitos/internal/note"
 	"habitos/internal/profile"
 )
 
@@ -74,7 +77,7 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	created, err := habits.Create(ctx, identity, "America/Sao_Paulo", habit.Input{
 		Title: "Ler", Description: "Ler diariamente", GoalType: habit.GoalQuantitative,
 		TargetHundredths: 2000, Unit: habit.UnitPages,
-		Schedule: habit.Schedule{Weekdays: []int{1, 3, 5}, Time: "19:00", WeeklyTargetExecutions: 3, Reminder: habit.ReminderNotification},
+		Schedule: habit.Schedule{Weekdays: []int{1, 2, 3, 4, 5, 6, 7}, Time: "19:00", WeeklyTargetExecutions: 7, Reminder: habit.ReminderNotification},
 	})
 	if err != nil {
 		t.Fatalf("criar hábito: %v", err)
@@ -122,6 +125,88 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	if err := pendingSnapshot.DataTo(&pending); err != nil || pending.Schedule.Time != "21:30" || pending.Schedule.Reminder != habit.ReminderEmail {
 		t.Fatalf("versão pendente não contém última edição: %#v erro=%v", pending, err)
 	}
+	executionRepository := execution.NewFirestoreRepository(clients.Firestore)
+	executions := execution.NewService(executionRepository)
+	versionsForSync, err := habitRepository.ListScheduleVersions(ctx, uid, created.ID)
+	if err != nil {
+		t.Fatalf("listar versões para materialização: %v", err)
+	}
+	location, _ := time.LoadLocation("America/Sao_Paulo")
+	today := time.Now().In(location).Format("2006-01-02")
+	var syncGroup sync.WaitGroup
+	syncErrors := make(chan error, 4)
+	for range 4 {
+		syncGroup.Add(1)
+		go func() {
+			defer syncGroup.Done()
+			syncErrors <- executions.SyncHabit(ctx, identity, lastUpdated, versionsForSync, "America/Sao_Paulo", today)
+		}()
+	}
+	syncGroup.Wait()
+	close(syncErrors)
+	for syncErr := range syncErrors {
+		if syncErr != nil {
+			t.Fatalf("materialização concorrente: %v", syncErr)
+		}
+	}
+	history, err := executions.History(ctx, identity, created.ID, "")
+	if err != nil || len(history) != 1 {
+		t.Fatalf("histórico=%#v erro=%v", history, err)
+	}
+	registered, err := executions.RecordQuantitative(ctx, identity, history[0].ID, 1200)
+	if err != nil || registered.Status != execution.StatusPartial {
+		t.Fatalf("registrar parcial=%#v erro=%v", registered, err)
+	}
+	var registrationGroup sync.WaitGroup
+	registrationErrors := make(chan error, 4)
+	for range 4 {
+		registrationGroup.Add(1)
+		go func() {
+			defer registrationGroup.Done()
+			_, registerErr := executions.RecordQuantitative(ctx, identity, history[0].ID, 1200)
+			registrationErrors <- registerErr
+		}()
+	}
+	registrationGroup.Wait()
+	close(registrationErrors)
+	for registerErr := range registrationErrors {
+		if registerErr != nil {
+			t.Fatalf("registro concorrente: %v", registerErr)
+		}
+	}
+	afterSame, err := executions.Get(ctx, identity, history[0].ID)
+	if err != nil || !afterSame.UpdatedAt.Equal(registered.UpdatedAt) {
+		t.Fatalf("registro idêntico alterou UpdatedAt: antes=%v depois=%v erro=%v", registered.UpdatedAt, afterSame.UpdatedAt, err)
+	}
+	completedExecution, err := executions.RecordQuantitative(ctx, identity, history[0].ID, 2000)
+	if err != nil || completedExecution.PerformedAt == nil || registered.PerformedAt == nil || !completedExecution.PerformedAt.Equal(*registered.PerformedAt) {
+		t.Fatalf("correção parcial-concluído não preservou PerformedAt: %#v erro=%v", completedExecution, err)
+	}
+	notDoneExecution, err := executions.RecordQuantitative(ctx, identity, history[0].ID, 0)
+	if err != nil || notDoneExecution.PerformedAt != nil {
+		t.Fatalf("correção not_done não removeu PerformedAt: %#v erro=%v", notDoneExecution, err)
+	}
+	positiveAgain, err := executions.RecordQuantitative(ctx, identity, history[0].ID, 500)
+	if err != nil || positiveAgain.PerformedAt == nil {
+		t.Fatalf("retorno positivo não criou PerformedAt: %#v erro=%v", positiveAgain, err)
+	}
+	if _, err := executions.Get(ctx, auth.Identity{UID: "outro-uid", Email: "outro@test"}, history[0].ID); !errors.Is(err, execution.ErrNotFound) {
+		t.Fatalf("outro usuário leu execução: %v", err)
+	}
+	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
+	createdNote, err := notes.Create(ctx, identity, created.ID, history[0].ID, "Reflexão local")
+	if err != nil {
+		t.Fatalf("criar nota: %v", err)
+	}
+	if _, err := notes.Update(ctx, auth.Identity{UID: "outro-uid", Email: "outro@test"}, createdNote.ID, "invadir"); !errors.Is(err, note.ErrNotFound) {
+		t.Fatalf("outro usuário editou nota: %v", err)
+	}
+	if _, err := notes.Update(ctx, identity, createdNote.ID, "Reflexão editada"); err != nil {
+		t.Fatalf("editar nota: %v", err)
+	}
+	if err := notes.Delete(ctx, identity, createdNote.ID); err != nil {
+		t.Fatalf("excluir nota: %v", err)
+	}
 	archived, err := habits.Archive(ctx, identity, created.ID)
 	if err != nil || archived.Status != habit.StatusArchived {
 		t.Fatalf("arquivar=%#v erro=%v", archived, err)
@@ -164,6 +249,14 @@ func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid str
 			}
 		}
 		_, _ = doc.Ref.Delete(ctx)
+	}
+	for _, collection := range []string{"executions", "notes", "executionUniqueness", "habitOccurrenceCursors"} {
+		items, itemErr := clients.Firestore.Collection(collection).Where("ownerUid", "==", uid).Documents(ctx).GetAll()
+		if itemErr == nil {
+			for _, item := range items {
+				_, _ = item.Ref.Delete(ctx)
+			}
+		}
 	}
 }
 

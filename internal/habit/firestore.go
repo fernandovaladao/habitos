@@ -3,6 +3,7 @@ package habit
 import (
 	"context"
 	"fmt"
+	"sort"
 
 	"cloud.google.com/go/firestore"
 	"google.golang.org/api/iterator"
@@ -73,6 +74,29 @@ func (r *FirestoreRepository) List(ctx context.Context, ownerUID string) ([]Habi
 	return values, nil
 }
 
+func (r *FirestoreRepository) ListScheduleVersions(ctx context.Context, ownerUID, habitID string) ([]ScheduleVersion, error) {
+	if _, err := r.Get(ctx, ownerUID, habitID); err != nil {
+		return nil, err
+	}
+	docs, err := r.client.Collection("habits").Doc(habitID).Collection("scheduleVersions").Documents(ctx).GetAll()
+	if err != nil {
+		return nil, fmt.Errorf("listar versões de agenda: %w", err)
+	}
+	values := make([]ScheduleVersion, 0, len(docs))
+	for _, doc := range docs {
+		var value ScheduleVersion
+		if err := doc.DataTo(&value); err != nil {
+			return nil, fmt.Errorf("decodificar versão de agenda: %w", err)
+		}
+		if value.OwnerUID != ownerUID {
+			return nil, ErrNotFound
+		}
+		values = append(values, value)
+	}
+	sort.Slice(values, func(i, j int) bool { return values[i].EffectiveDate < values[j].EffectiveDate })
+	return values, nil
+}
+
 func (r *FirestoreRepository) Update(ctx context.Context, value Habit, version *ScheduleVersion) error {
 	doc := r.client.Collection("habits").Doc(value.ID)
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
@@ -98,7 +122,7 @@ func (r *FirestoreRepository) Update(ctx context.Context, value Habit, version *
 				return ErrNotFound
 			}
 			versionDoc := doc.Collection("scheduleVersions").Doc(version.ID)
-			if persisted.PendingScheduleVersionID == version.ID && persisted.ScheduleEffectiveAt.Equal(version.EffectiveAt) {
+			if persisted.PendingScheduleVersionID == version.ID && persisted.ScheduleEffectiveDate == version.EffectiveDate {
 				return tx.Set(versionDoc, *version)
 			}
 			return tx.Create(versionDoc, *version)

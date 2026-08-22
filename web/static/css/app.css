@@ -269,6 +269,18 @@ p { color: var(--muted); font-size: 1.05rem; }
 .detail-card { padding: 24px; }
 .detail-card h2 { margin-top: 0; }
 .detail-actions { display: flex; flex-wrap: wrap; gap: 12px; }
+.execution-card, .note-form { margin: 24px 0; padding: 24px; }
+.execution-card form, .note-form { display: grid; gap: 12px; }
+.execution-card input, .note-form textarea, .note-card textarea { width: 100%; padding: 11px 13px; border: 1px solid var(--border); border-radius: 10px; font: inherit; }
+.history-list { padding: 8px 22px; }
+.history-row { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 12px; padding: 14px 0; border-bottom: 1px solid var(--border); }
+.execution-status--completed { color: #208b53; }
+.execution-status--partial { color: var(--orange-500); }
+.execution-status--not_done { color: #b42318; }
+.note-list { display: grid; gap: 12px; margin: 18px 0; }
+.note-card { padding: 18px; }
+.note-card div { display: flex; gap: 10px; margin-top: 8px; }
+.note-card button { border: 0; background: transparent; color: var(--blue-700); font: inherit; font-weight: 700; cursor: pointer; }
 
 @media (max-width: 700px) {
   .form-grid, .details-grid { grid-template-columns: 1fr; }

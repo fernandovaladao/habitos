@@ -49,6 +49,21 @@ if (form) {
 }
 
 document.addEventListener("click", async (event) => {
+  const simple = event.target.closest("[data-simple-result]");
+  if (simple) {
+    simple.disabled = true;
+    try { await request(`/api/executions/${simple.dataset.executionId}/simple`, "POST", { completed: simple.dataset.simpleResult === "true" }); window.location.reload(); }
+    catch (error) { window.alert(error.message); simple.disabled = false; }
+    return;
+  }
+  const noteButton = event.target.closest("[data-note-action]");
+  if (noteButton) {
+    const card = noteButton.closest("[data-note-id]"); const action = noteButton.dataset.noteAction;
+    if (action === "delete" && !window.confirm("Excluir esta nota/reflexão?")) return;
+    try { await request(`/api/notes/${card.dataset.noteId}`, action === "delete" ? "DELETE" : "PUT", action === "edit" ? { content: card.querySelector("textarea").value } : {}); window.location.reload(); }
+    catch (error) { window.alert(error.message); }
+    return;
+  }
   const button = event.target.closest("[data-habit-action]");
   if (!button) return;
   const action = button.dataset.habitAction;
@@ -63,6 +78,12 @@ document.addEventListener("click", async (event) => {
     button.disabled = false;
   }
 });
+
+const executionForm = document.querySelector("[data-execution-form]");
+if (executionForm) executionForm.addEventListener("submit", async (event) => { event.preventDefault(); const message=executionForm.querySelector("[data-form-message]");try{await request(`/api/executions/${executionForm.dataset.executionId}/quantitative`,"POST",{achieved:executionForm.elements.achieved.value});window.location.reload()}catch(error){message.textContent=error.message} });
+
+const noteForm = document.querySelector("[data-note-form]");
+if (noteForm) noteForm.addEventListener("submit",async(event)=>{event.preventDefault();const message=noteForm.querySelector("[data-form-message]");try{await request(`/api/habits/${noteForm.dataset.habitId}/notes`,"POST",{content:noteForm.elements.content.value,executionId:noteForm.elements.attachExecution.checked?noteForm.elements.executionId.value:""});window.location.reload()}catch(error){message.textContent=error.message}});
 
 async function request(url, method, body) {
   const csrf = await csrfToken();

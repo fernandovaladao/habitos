@@ -41,6 +41,12 @@ func (r *memoryRepository) List(_ context.Context, uid string) ([]Habit, error) 
 	}
 	return out, nil
 }
+func (r *memoryRepository) ListScheduleVersions(_ context.Context, uid, id string) ([]ScheduleVersion, error) {
+	if _, err := r.Get(context.Background(), uid, id); err != nil {
+		return nil, err
+	}
+	return append([]ScheduleVersion(nil), r.versions[id]...), nil
+}
 func (r *memoryRepository) Update(_ context.Context, v Habit, s *ScheduleVersion) error {
 	old, ok := r.values[v.ID]
 	if !ok || old.OwnerUID != v.OwnerUID || old.DeletedAt != nil {
@@ -81,7 +87,7 @@ func TestCreateValidHabit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.OwnerUID != "a" || h.ID == "" || len(r.versions[h.ID]) != 1 || h.CreatedAt.Nanosecond() != 123456000 {
+	if h.OwnerUID != "a" || h.ID == "" || len(r.versions[h.ID]) != 1 || h.CreatedAt.Nanosecond() != 123456000 || h.ScheduleEffectiveDate != "2026-08-22" || r.versions[h.ID][0].EffectiveDate != "2026-08-22" {
 		t.Fatalf("hábito inesperado: %#v", h)
 	}
 }
@@ -147,6 +153,9 @@ func TestArchiveAndReactivate(t *testing.T) {
 	if !active.OccurrencesResumeAt.Equal(want) {
 		t.Fatalf("retomada=%v, esperado %v", active.OccurrencesResumeAt, want)
 	}
+	if active.OccurrencesResumeDate != "2026-08-23" {
+		t.Fatalf("data civil de retomada=%q", active.OccurrencesResumeDate)
+	}
 }
 func TestDuplicateCreatesActiveHabitWithNewIdentityAndDates(t *testing.T) {
 	r := newMemoryRepository()
@@ -173,11 +182,29 @@ func TestScheduleChangeStartsNextDayAndPreservesSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := time.Date(2026, 8, 23, 3, 0, 0, 0, time.UTC)
-	if !updated.ScheduleEffectiveAt.Equal(want) || updated.PreviousSchedule == nil || len(r.versions[h.ID]) != 2 {
+	if !updated.ScheduleEffectiveAt.Equal(want) || updated.ScheduleEffectiveDate != "2026-08-23" || updated.PreviousSchedule == nil || len(r.versions[h.ID]) != 2 {
 		t.Fatalf("agenda inválida: %#v versões=%d", updated, len(r.versions[h.ID]))
 	}
 	if updated.EffectiveSchedule(s.now()).Time != "19:00" {
 		t.Fatal("agenda anterior não permaneceu vigente")
+	}
+}
+
+func TestGoalChangeStartsNextDayAndPreservesCurrentSnapshot(t *testing.T) {
+	r := newMemoryRepository()
+	s := serviceAt(r)
+	h, _ := s.Create(context.Background(), userA, "America/Sao_Paulo", validInput())
+	input := validInput()
+	input.TargetHundredths = 3000
+	updated, err := s.Update(context.Background(), userA, "America/Sao_Paulo", h.ID, input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(r.versions[h.ID]) != 2 || r.versions[h.ID][0].TargetHundredths != 2000 || r.versions[h.ID][1].TargetHundredths != 3000 || r.versions[h.ID][1].EffectiveDate != "2026-08-23" {
+		t.Fatalf("versões de meta inválidas: %#v", r.versions[h.ID])
+	}
+	if updated.TargetHundredths != 3000 {
+		t.Fatal("projeção não contém meta futura")
 	}
 }
 

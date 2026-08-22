@@ -12,9 +12,11 @@ import (
 
 	"habitos/internal/auth"
 	"habitos/internal/config"
+	"habitos/internal/execution"
 	"habitos/internal/firebaseadmin"
 	"habitos/internal/habit"
 	"habitos/internal/httpserver"
+	"habitos/internal/note"
 	"habitos/internal/profile"
 )
 
@@ -40,6 +42,8 @@ func main() {
 	sessions := auth.NewFirebaseSessionManager(clients.Auth)
 	profiles := profile.NewService(profile.NewFirestoreRepository(clients.Firestore))
 	habits := habit.NewService(habit.NewFirestoreRepository(clients.Firestore))
+	executions := execution.NewService(execution.NewFirestoreRepository(clients.Firestore))
+	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
 		Logger:        logger,
@@ -52,9 +56,11 @@ func main() {
 			AuthEmulatorURL: appConfig.AuthEmulatorURL,
 		},
 	}, httpserver.Dependencies{
-		Sessions: sessions,
-		Profiles: profiles,
-		Habits:   habits,
+		Sessions:   sessions,
+		Profiles:   profiles,
+		Habits:     habits,
+		Executions: executions,
+		Notes:      notes,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)
