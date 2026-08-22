@@ -1,0 +1,17 @@
+# Binários e artefatos Go
+/bin/
+/tmp/
+*.test
+*.out
+coverage.out
+
+# Configuração local e segredos
+.env
+.env.*
+!.env.example
+
+# Editores e sistema operacional
+.idea/
+.vscode/
+.DS_Store
+

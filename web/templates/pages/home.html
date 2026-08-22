@@ -1,0 +1,36 @@
+{{define "home"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">
+    {{template "brand" .}}
+  </header>
+
+  <main class="page-shell">
+    <section class="hero card">
+      <div>
+        <p class="eyebrow">Pequenas ações + consistência = evolução</p>
+        <h1>Crie hábitos melhores, um passo de cada vez.</h1>
+        <p>O HÁBITOS ajuda adolescentes a organizar a rotina e desenvolver hábitos positivos usando os 4 Rs da formação de hábitos.</p>
+        <a class="button button--primary" href="/criar-habito">Criar meu primeiro hábito</a>
+      </div>
+      <div class="hero__symbol" aria-hidden="true"><span></span><span></span><span></span></div>
+    </section>
+
+    <section aria-labelledby="four-rs-title">
+      <h2 id="four-rs-title">Como funcionam os 4 Rs?</h2>
+      <div class="feature-grid">
+        <article class="card feature"><strong>Relembrar</strong><p>Um estímulo indica que é hora de agir.</p></article>
+        <article class="card feature feature--orange"><strong>Rotina</strong><p>Você realiza a ação planejada.</p></article>
+        <article class="card feature"><strong>Recompensa</strong><p>Seu progresso é reconhecido.</p></article>
+        <article class="card feature feature--orange"><strong>Repetição</strong><p>O ciclo se repete e fortalece o hábito.</p></article>
+      </div>
+    </section>
+  </main>
+
+  {{template "navigation" .}}
+</body>
+</html>
+{{end}}
+

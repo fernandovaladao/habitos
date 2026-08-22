@@ -1,0 +1,24 @@
+{{define "placeholder"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">
+    {{template "brand" .}}
+  </header>
+
+  <main class="page-shell page-shell--centered">
+    <section class="card empty-state">
+      <span class="empty-state__mark" aria-hidden="true">●</span>
+      <p class="eyebrow">Fundação técnica pronta</p>
+      <h1>{{.Title}}</h1>
+      <p>{{.Description}}</p>
+      <a class="button button--secondary" href="/">Voltar ao início</a>
+    </section>
+  </main>
+
+  {{template "navigation" .}}
+</body>
+</html>
+{{end}}
+

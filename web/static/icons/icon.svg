@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="HÁBITOS">
+  <rect width="512" height="512" rx="112" fill="#f4f7fb"/>
+  <circle cx="256" cy="256" r="152" fill="none" stroke="#1559aa" stroke-width="76"/>
+  <path d="M367 152a152 152 0 0 1 35 104" fill="none" stroke="#ff7f1a" stroke-width="76" stroke-linecap="round"/>
+  <circle cx="256" cy="256" r="42" fill="#ff7f1a"/>
+</svg>
+

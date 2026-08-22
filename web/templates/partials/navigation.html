@@ -1,0 +1,12 @@
+{{define "navigation"}}
+<nav class="main-nav" aria-label="Navegação principal">
+  <a href="/" {{if eq .Path "/"}}aria-current="page"{{end}}><span aria-hidden="true">⌂</span>Início</a>
+  <a href="/criar-habito" {{if eq .Path "/criar-habito"}}aria-current="page"{{end}}><span aria-hidden="true">＋</span>Criar Hábito</a>
+  <a href="/meus-habitos" {{if eq .Path "/meus-habitos"}}aria-current="page"{{end}}><span aria-hidden="true">✓</span>Meus Hábitos</a>
+  <a href="/progresso" {{if eq .Path "/progresso"}}aria-current="page"{{end}}><span aria-hidden="true">▥</span>Progresso</a>
+  <a href="/recompensas" {{if eq .Path "/recompensas"}}aria-current="page"{{end}}><span aria-hidden="true">★</span>Recompensas</a>
+  <a href="/aprenda-4rs" {{if eq .Path "/aprenda-4rs"}}aria-current="page"{{end}}><span aria-hidden="true">4R</span>Aprenda os 4 Rs</a>
+  <a href="/perfil" {{if eq .Path "/perfil"}}aria-current="page"{{end}}><span aria-hidden="true">●</span>Perfil</a>
+</nav>
+{{end}}
+

@@ -1,0 +1,9 @@
+.git
+.gitignore
+.agents
+.codex
+docs
+README.md
+tmp
+coverage.out
+
