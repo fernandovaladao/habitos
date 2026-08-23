@@ -19,6 +19,7 @@ import (
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
+	"habitos/internal/ranking"
 )
 
 func main() {
@@ -46,6 +47,7 @@ func main() {
 	executions := execution.NewService(execution.NewFirestoreRepository(clients.Firestore))
 	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
 	progressService := progress.NewService(progress.NewFirestoreRepository(clients.Firestore))
+	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
 		Logger:        logger,
@@ -64,6 +66,7 @@ func main() {
 		Executions: executions,
 		Notes:      notes,
 		Progress:   progressService,
+		Ranking:    rankingService,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)

@@ -14,6 +14,7 @@ import (
 	"habitos/internal/gamification"
 	"habitos/internal/habit"
 	"habitos/internal/profile"
+	"habitos/internal/ranking"
 )
 
 type FirestoreRepository struct{ client *firestore.Client }
@@ -402,6 +403,12 @@ func (r *FirestoreRepository) reconcileTransaction(ctx context.Context, tx *fire
 		user.TotalPoints += totalDelta
 		reached := now
 		user.TotalPointsReachedAt = &reached
+		if err := ranking.ReconcileTransaction(tx, r.client, ranking.ProjectionInput{
+			UID: user.UID, Nickname: user.Nickname, RankingOptIn: user.RankingOptIn, ProfileComplete: user.ProfileComplete,
+			TotalPoints: user.TotalPoints, TotalPointsReachedAt: user.TotalPointsReachedAt, CreatedAt: user.CreatedAt, UpdatedAt: now,
+		}); err != nil {
+			return err
+		}
 	}
 
 	milestones := make([]int, 0)

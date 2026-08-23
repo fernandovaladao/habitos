@@ -22,6 +22,7 @@ import (
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
+	"habitos/internal/ranking"
 )
 
 type fakeSessionManager struct {
@@ -109,6 +110,7 @@ type testApp struct {
 	habits     *fakeHabitRepository
 	executions *fakeExecutionRepository
 	notes      *fakeNoteRepository
+	ranking    *fakeRankingRepository
 }
 
 type fakeHabitRepository struct {
@@ -217,6 +219,32 @@ func (*fakeProgressRepository) Habits(context.Context, string, []string) (map[st
 	return map[string]progress.HabitDescriptor{}, nil
 }
 
+type fakeRankingRepository struct {
+	top      []ranking.Entry
+	self     ranking.Entry
+	count    int
+	previous *ranking.Entry
+}
+
+func (r *fakeRankingRepository) Top(_ context.Context, limit int) ([]ranking.Entry, error) {
+	if len(r.top) < limit {
+		limit = len(r.top)
+	}
+	return r.top[:limit], nil
+}
+func (r *fakeRankingRepository) Get(_ context.Context, uid string) (ranking.Entry, error) {
+	if r.self.UID != uid {
+		return ranking.Entry{}, ranking.ErrNotFound
+	}
+	return r.self, nil
+}
+func (r *fakeRankingRepository) CountBefore(context.Context, ranking.Entry) (int, error) {
+	return r.count, nil
+}
+func (r *fakeRankingRepository) Previous(context.Context, ranking.Entry) (*ranking.Entry, error) {
+	return r.previous, nil
+}
+
 func newFakeNoteRepository() *fakeNoteRepository {
 	return &fakeNoteRepository{values: map[string]note.Note{}}
 }
@@ -321,15 +349,16 @@ func newTestApp(t *testing.T) testApp {
 	executionService := execution.NewService(executionRepo)
 	habitService := habit.NewService(habits)
 	noteRepo := newFakeNoteRepository()
+	rankingRepo := &fakeRankingRepository{}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{})})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo)})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -555,6 +584,45 @@ func TestProgressRejectsCustomPeriodLongerThan366Days(t *testing.T) {
 	app.handler.ServeHTTP(recorder, request)
 	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "no máximo 366 dias") {
 		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestRankingTopIsVisibleWithoutOptInAndPrivateFieldsStayAbsent(t *testing.T) {
+	app := newTestApp(t)
+	app.ranking.top = []ranking.Entry{{UID: "ranked-uid", Nickname: "Luna", AvatarType: ranking.DefaultAvatarType, TotalPoints: 2430}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/recompensas", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, "Luna") || !strings.Contains(body, "ative a participação no Perfil") {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, body)
+	}
+	for _, private := range []string{"ranked-uid", "a@example.com", "America/Sao_Paulo", "weightHundredths"} {
+		if strings.Contains(body, private) {
+			t.Fatalf("ranking expôs dado privado %q", private)
+		}
+	}
+}
+
+func TestRankingShowsParticipantOutsideTopAndDistance(t *testing.T) {
+	app := newTestApp(t)
+	now := time.Now().UTC()
+	app.profiles.profiles["firebase-user-a"] = profile.Profile{UID: "firebase-user-a", Email: "a@example.com", Nickname: "Nico", Age: 15, Timezone: "UTC", RankingOptIn: true, ProfileComplete: true, TotalPoints: 100, CreatedAt: now, UpdatedAt: now}
+	for index := range 10 {
+		app.ranking.top = append(app.ranking.top, ranking.Entry{UID: fmt.Sprintf("top-%02d", index), Nickname: fmt.Sprintf("Pessoa %d", index+1), TotalPoints: int64(200 - index)})
+	}
+	previous := ranking.Entry{UID: "previous", Nickname: "Anterior", TotalPoints: 105}
+	app.ranking.self = ranking.Entry{UID: "firebase-user-a", Nickname: "Nico", TotalPoints: 100}
+	app.ranking.count = 10
+	app.ranking.previous = &previous
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/recompensas", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, "11º lugar") || !strings.Contains(body, "Faltam 6 pontos") {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, body)
 	}
 }
 

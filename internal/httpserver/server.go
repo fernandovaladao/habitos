@@ -22,6 +22,7 @@ import (
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
+	"habitos/internal/ranking"
 	webassets "habitos/web"
 )
 
@@ -47,6 +48,7 @@ type Dependencies struct {
 	Executions *execution.Service
 	Notes      *note.Service
 	Progress   *progress.Service
+	Ranking    *ranking.Service
 }
 
 type pageData struct {
@@ -71,6 +73,7 @@ type pageData struct {
 	MaxCurrentStreak  int
 	HabitTitles       map[string]string
 	Progress          progress.Report
+	Ranking           ranking.Board
 	FirebaseEnabled   bool
 }
 
@@ -84,6 +87,7 @@ type handler struct {
 	executions    *execution.Service
 	notes         *note.Service
 	progress      *progress.Service
+	ranking       *ranking.Service
 	auth          *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
@@ -117,8 +121,8 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil {
-		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas e progresso são obrigatórias")
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil {
+		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso e ranking são obrigatórias")
 	}
 
 	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
@@ -140,6 +144,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		executions:    dependencies.Executions,
 		notes:         dependencies.Notes,
 		progress:      dependencies.Progress,
+		ranking:       dependencies.Ranking,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
@@ -429,6 +434,14 @@ func (h *handler) rewardsPage(w http.ResponseWriter, r *http.Request) {
 		h.renderHabitError(w, err)
 		return
 	}
+	identity, _ := auth.IdentityFromContext(r.Context())
+	participating := data.Profile.RankingOptIn && data.Profile.ProfileComplete && profile.ValidateNickname(data.Profile.Nickname) == nil
+	board, err := h.ranking.Board(r.Context(), identity, participating)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	data.Ranking = board
 	data.Title, data.Description, data.Path = "Recompensas", "Veja seus bônus e conquistas.", "/recompensas"
 	h.render(w, http.StatusOK, "rewards", data)
 }

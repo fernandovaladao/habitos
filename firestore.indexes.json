@@ -1,0 +1,23 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "publicRanking",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "totalPoints",
+          "order": "DESCENDING"
+        },
+        {
+          "fieldPath": "rankingReachedAt",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

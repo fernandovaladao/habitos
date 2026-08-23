@@ -8,10 +8,12 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"cloud.google.com/go/firestore"
 	"habitos/internal/auth"
 	"habitos/internal/config"
 	"habitos/internal/execution"
@@ -20,6 +22,7 @@ import (
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
+	"habitos/internal/ranking"
 )
 
 func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
@@ -71,6 +74,45 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	}
 	if first.RankingOptIn || first.ProfileComplete {
 		t.Fatalf("perfil mínimo deveria ser privado e incompleto: %#v", first)
+	}
+	participantProfile, err := profiles.Update(ctx, identity, profile.Update{Nickname: "Pessoa local", Age: 15, Timezone: "America/Sao_Paulo", RankingOptIn: true})
+	if err != nil {
+		t.Fatalf("ativar ranking: %v", err)
+	}
+	projectionDoc := clients.Firestore.Collection(ranking.CollectionName).Doc(uid)
+	projectionSnapshot, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("opt-in não criou projeção: %v", err)
+	}
+	var initialProjection ranking.Entry
+	if err := projectionSnapshot.DataTo(&initialProjection); err != nil || initialProjection.Nickname != participantProfile.Nickname || initialProjection.TotalPoints != 0 || !initialProjection.RankingReachedAt.Equal(participantProfile.CreatedAt) {
+		t.Fatalf("projeção inicial inválida: %#v erro=%v", initialProjection, err)
+	}
+	if _, err := projectionDoc.Delete(ctx); err != nil {
+		t.Fatalf("remover projeção para testar reparo: %v", err)
+	}
+	if _, err := profiles.EnsureProfile(ctx, identity, "UTC"); err != nil {
+		t.Fatalf("reparar projeção ausente: %v", err)
+	}
+	if _, err := projectionDoc.Get(ctx); err != nil {
+		t.Fatalf("EnsureProfile não reparou projeção: %v", err)
+	}
+	if _, err := projectionDoc.Update(ctx, []firestore.Update{{Path: "nickname", Value: "Divergente"}, {Path: "email", Value: "nao-pode-vazar@example.test"}}); err != nil {
+		t.Fatalf("preparar projeção divergente: %v", err)
+	}
+	if _, err := profiles.EnsureProfile(ctx, identity, "UTC"); err != nil {
+		t.Fatalf("reparar projeção divergente: %v", err)
+	}
+	repairedSnapshot, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler projeção reparada: %v", err)
+	}
+	var repairedProjection ranking.Entry
+	if err := repairedSnapshot.DataTo(&repairedProjection); err != nil || repairedProjection.Nickname != participantProfile.Nickname {
+		t.Fatalf("projeção divergente não foi reparada: %#v erro=%v", repairedProjection, err)
+	}
+	if _, leaked := repairedSnapshot.Data()["email"]; leaked {
+		t.Fatalf("reparo preservou campo privado: %#v", repairedSnapshot.Data())
 	}
 
 	habitRepository := habit.NewFirestoreRepository(clients.Firestore)
@@ -225,10 +267,19 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 		t.Fatalf("total não recebeu pontos e bônus: %#v erro=%v", profileAfterBonus, err)
 	}
 	reachedAt := profileAfterBonus.TotalPointsReachedAt
+	projectionBeforeIdenticalSnapshot, _ := projectionDoc.Get(ctx)
+	var projectionBeforeIdentical ranking.Entry
+	_ = projectionBeforeIdenticalSnapshot.DataTo(&projectionBeforeIdentical)
 	identical, err := executions.RecordSimple(ctx, identity, streakExecutions[2].ID, true)
 	profileAfterIdentical, _ := profiles.Get(ctx, identity)
 	if err != nil || !identical.UpdatedAt.Equal(streakExecutions[2].UpdatedAt) || reachedAt == nil || profileAfterIdentical.TotalPointsReachedAt == nil || !profileAfterIdentical.TotalPointsReachedAt.Equal(*reachedAt) {
 		t.Fatalf("reenvio idêntico não foi no-op: execução=%#v perfil=%#v erro=%v", identical, profileAfterIdentical, err)
+	}
+	projectionAfterIdenticalSnapshot, _ := projectionDoc.Get(ctx)
+	var projectionAfterIdentical ranking.Entry
+	_ = projectionAfterIdenticalSnapshot.DataTo(&projectionAfterIdentical)
+	if projectionAfterIdentical.TotalPoints != projectionBeforeIdentical.TotalPoints || !projectionAfterIdentical.UpdatedAt.Equal(projectionBeforeIdentical.UpdatedAt) {
+		t.Fatalf("reenvio idêntico alterou projeção: antes=%#v depois=%#v", projectionBeforeIdentical, projectionAfterIdentical)
 	}
 	if _, err := executions.RecordSimple(ctx, identity, streakExecutions[1].ID, false); err != nil {
 		t.Fatalf("correção retroativa: %v", err)
@@ -237,6 +288,14 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	reducedProfile, _ := profiles.Get(ctx, identity)
 	if reducedStreak.CurrentStreak != 1 || reducedStreak.BestStreak != 3 || reducedProfile.TotalPoints != profileAfterBonus.TotalPoints-10 {
 		t.Fatalf("correção não preservou histórico: streak=%#v perfil=%#v", reducedStreak, reducedProfile)
+	}
+	reducedProjectionSnapshot, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler ranking após correção retroativa: %v", err)
+	}
+	var reducedProjection ranking.Entry
+	if err := reducedProjectionSnapshot.DataTo(&reducedProjection); err != nil || reducedProjection.TotalPoints != reducedProfile.TotalPoints {
+		t.Fatalf("correção retroativa não atualizou ranking: %#v perfil=%#v erro=%v", reducedProjection, reducedProfile, err)
 	}
 	if _, err := executions.RecordSimple(ctx, identity, streakExecutions[1].ID, true); err != nil {
 		t.Fatalf("reconstruir sequência: %v", err)
@@ -282,6 +341,14 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	} else {
 		t.Fatalf("estado concorrente inesperado: %#v", finalMiddle)
 	}
+	concurrentProjectionSnapshot, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler ranking após correção concorrente: %v", err)
+	}
+	var concurrentProjection ranking.Entry
+	if err := concurrentProjectionSnapshot.DataTo(&concurrentProjection); err != nil || concurrentProjection.TotalPoints != finalProfile.TotalPoints {
+		t.Fatalf("correção concorrente divergiu ranking e perfil: projeção=%#v perfil=%#v erro=%v", concurrentProjection, finalProfile, err)
+	}
 	if _, err := habits.Archive(ctx, identity, gamificationHabit.ID); err != nil {
 		t.Fatalf("arquivar hábito com streak: %v", err)
 	}
@@ -318,6 +385,14 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	profileAfterLegacy, _ := profiles.Get(ctx, identity)
 	if profileAfterLegacy.TotalPoints != profileBeforeLegacy.TotalPoints+10 || profileAfterLegacy.TotalPointsReachedAt == nil {
 		t.Fatalf("total legado não reconciliado: antes=%#v depois=%#v", profileBeforeLegacy, profileAfterLegacy)
+	}
+	projectionAfterPoints, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler projeção após gamificação: %v", err)
+	}
+	var scoredProjection ranking.Entry
+	if err := projectionAfterPoints.DataTo(&scoredProjection); err != nil || scoredProjection.TotalPoints != profileAfterLegacy.TotalPoints || profileAfterLegacy.TotalPointsReachedAt == nil || !scoredProjection.RankingReachedAt.Equal(*profileAfterLegacy.TotalPointsReachedAt) {
+		t.Fatalf("gamificação não atualizou projeção atomicamente: %#v perfil=%#v erro=%v", scoredProjection, profileAfterLegacy, err)
 	}
 	firstScoredAt := *reconciledLegacy.ScoredAt
 	firstTotalReachedAt := *profileAfterLegacy.TotalPointsReachedAt
@@ -392,6 +467,43 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	if !foundDuplicated {
 		t.Fatalf("hábito duplicado ausente da listagem: %#v", listed)
 	}
+	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
+	commonReachedAt := time.Now().UTC().Truncate(time.Microsecond)
+	for index := 0; index < 11; index++ {
+		entryUID := fmt.Sprintf("higher-%02d-%s", index, uid)
+		points := profileAfterLegacy.TotalPoints + int64(11-index)
+		reachedAt := commonReachedAt.Add(time.Duration(index) * time.Minute)
+		if index == 1 {
+			points, reachedAt = profileAfterLegacy.TotalPoints+11, commonReachedAt
+		}
+		if index == 3 {
+			points, reachedAt = profileAfterLegacy.TotalPoints+9, commonReachedAt.Add(time.Minute)
+		}
+		entry := ranking.Entry{Nickname: fmt.Sprintf("Pessoa %02d", index), AvatarType: ranking.DefaultAvatarType, TotalPoints: points, RankingReachedAt: reachedAt, UpdatedAt: commonReachedAt}
+		if _, err := clients.Firestore.Collection(ranking.CollectionName).Doc(entryUID).Set(ctx, entry); err != nil {
+			t.Fatalf("preparar ranking: %v", err)
+		}
+	}
+	board, err := rankingService.Board(ctx, identity, true)
+	if err != nil {
+		t.Fatalf("consultar ranking: %v", err)
+	}
+	if len(board.Top) != 10 || board.Self == nil || board.Self.Position != 12 || board.PointsToSurpass == nil || *board.PointsToSurpass != 2 {
+		t.Fatalf("ranking geral inválido: %#v", board)
+	}
+	if board.Top[0].Nickname != "Pessoa 00" || board.Top[1].Nickname != "Pessoa 01" || board.Top[2].Nickname != "Pessoa 03" || board.Top[3].Nickname != "Pessoa 02" {
+		t.Fatalf("desempates por timestamp/UID inválidos: %#v", board.Top[:4])
+	}
+	viewerBoard, err := rankingService.Board(ctx, auth.Identity{UID: "viewer"}, false)
+	if err != nil || len(viewerBoard.Top) != 10 || viewerBoard.Self != nil {
+		t.Fatalf("visualização sem opt-in inválida: %#v erro=%v", viewerBoard, err)
+	}
+	if _, err := profiles.Update(ctx, identity, profile.Update{Nickname: "Pessoa local", Age: 15, Timezone: "America/Sao_Paulo", RankingOptIn: false}); err != nil {
+		t.Fatalf("desativar ranking: %v", err)
+	}
+	if _, err := projectionDoc.Get(ctx); err == nil {
+		t.Fatal("opt-out não removeu projeção pública")
+	}
 }
 
 func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid string) {
@@ -415,6 +527,14 @@ func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid str
 		items, itemErr := clients.Firestore.Collection(collection).Where("ownerUid", "==", uid).Documents(ctx).GetAll()
 		if itemErr == nil {
 			for _, item := range items {
+				_, _ = item.Ref.Delete(ctx)
+			}
+		}
+	}
+	rankingItems, rankingErr := clients.Firestore.Collection(ranking.CollectionName).Documents(ctx).GetAll()
+	if rankingErr == nil {
+		for _, item := range rankingItems {
+			if item.Ref.ID == uid || strings.HasSuffix(item.Ref.ID, "-"+uid) {
 				_, _ = item.Ref.Delete(ctx)
 			}
 		}
