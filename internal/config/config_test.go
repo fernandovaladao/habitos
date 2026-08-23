@@ -1,6 +1,9 @@
 package config
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func resetConfigEnvironment(t *testing.T) {
 	t.Helper()
@@ -17,6 +20,9 @@ func resetConfigEnvironment(t *testing.T) {
 		"GCLOUD_PROJECT",
 		"GOOGLE_APPLICATION_CREDENTIALS",
 		"FIREBASE_CONFIG",
+		"OPENAI_API_KEY",
+		"OPENAI_MODEL",
+		"AI_REQUEST_TIMEOUT",
 	}
 	for _, name := range variables {
 		t.Setenv(name, "")
@@ -30,6 +36,31 @@ func setRequiredFirebaseEnvironment(t *testing.T) {
 	t.Setenv("FIREBASE_WEB_API_KEY", "public-key")
 	t.Setenv("FIREBASE_AUTH_DOMAIN", "project.firebaseapp.com")
 	t.Setenv("FIREBASE_APP_ID", "app-id")
+	t.Setenv("OPENAI_API_KEY", "openai-test-key")
+	t.Setenv("OPENAI_MODEL", "gpt-5.6-luna")
+	t.Setenv("AI_REQUEST_TIMEOUT", "10s")
+}
+
+func TestLoadReadsOpenAIConfiguration(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("OPENAI_MODEL", "modelo-configuravel")
+	t.Setenv("AI_REQUEST_TIMEOUT", "7s")
+
+	config, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if config.OpenAIAPIKey != "openai-test-key" || config.OpenAIModel != "modelo-configuravel" || config.AIRequestTimeout != 7*time.Second {
+		t.Fatalf("configuração OpenAI = %#v", config)
+	}
+}
+
+func TestLoadRejectsInvalidAITimeout(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("AI_REQUEST_TIMEOUT", "zero")
+	if _, err := Load(); err == nil {
+		t.Fatal("timeout inválido deveria ser rejeitado")
+	}
 }
 
 func TestLoadUsesInsecureCookieOnlyInDevelopment(t *testing.T) {

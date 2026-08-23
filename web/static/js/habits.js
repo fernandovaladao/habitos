@@ -46,6 +46,72 @@ if (form) {
       button.disabled = false;
     }
   });
+
+  const suggestButton = form.querySelector("[data-ai-suggest]");
+  const preview = document.querySelector("[data-ai-preview]");
+  let currentSuggestion = null;
+  if (suggestButton && preview) {
+    suggestButton.addEventListener("click", async () => {
+      const message = form.querySelector("[data-form-message]");
+      if (!form.elements.title.checkValidity() || !form.elements.description.checkValidity()) {
+        form.reportValidity();
+        message.textContent = "Preencha um título e uma descrição válidos antes de pedir uma sugestão.";
+        return;
+      }
+      suggestButton.disabled = true;
+      message.textContent = "Gerando sugestão…";
+      preview.hidden = true;
+      try {
+        currentSuggestion = await request("/api/habit-suggestions", "POST", {
+          title: form.elements.title.value,
+          description: form.elements.description.value
+        });
+        renderSuggestion(preview, currentSuggestion);
+        preview.hidden = false;
+        message.textContent = "Sugestão pronta. Revise antes de usar.";
+      } catch (error) {
+        currentSuggestion = null;
+        message.textContent = error.message;
+      } finally {
+        suggestButton.disabled = false;
+      }
+    });
+    preview.querySelector("[data-ai-ignore]").addEventListener("click", () => {
+      currentSuggestion = null;
+      preview.hidden = true;
+      form.querySelector("[data-form-message]").textContent = "Sugestão ignorada. Seus campos foram preservados.";
+    });
+    preview.querySelector("[data-ai-apply]").addEventListener("click", () => {
+      if (!currentSuggestion) return;
+      applySuggestion(form, currentSuggestion);
+      preview.hidden = true;
+      form.querySelector("[data-form-message]").textContent = "Sugestão aplicada aos campos. Revise e salve quando estiver pronto.";
+      currentSuggestion = null;
+    });
+  }
+}
+
+function renderSuggestion(preview, suggestion) {
+  const unitLabels = { pages: "páginas", minutes: "minutos", kilometers: "km", times: "vezes", liters: "litros", other: suggestion.customUnit };
+  const weekdayLabels = { 1: "Seg", 2: "Ter", 3: "Qua", 4: "Qui", 5: "Sex", 6: "Sáb", 7: "Dom" };
+  preview.querySelector("[data-ai-title]").textContent = suggestion.title;
+  preview.querySelector("[data-ai-description]").textContent = suggestion.description;
+  preview.querySelector("[data-ai-goal]").textContent = suggestion.goalType === "quantitative" ? `${suggestion.target} ${unitLabels[suggestion.unit] || ""}`.trim() : "Meta simples";
+  preview.querySelector("[data-ai-frequency]").textContent = `${suggestion.weekdays.map((day) => weekdayLabels[day]).join(", ")} · meta semanal ${suggestion.weeklyTargetExecutions}`;
+  preview.querySelector("[data-ai-time]").textContent = suggestion.time || "Manter o horário preenchido";
+}
+
+function applySuggestion(form, suggestion) {
+  form.elements.title.value = suggestion.title;
+  form.elements.description.value = suggestion.description;
+  form.elements.goalType.value = suggestion.goalType;
+  form.elements.target.value = suggestion.goalType === "quantitative" ? suggestion.target : "";
+  form.elements.unit.value = suggestion.goalType === "quantitative" ? suggestion.unit : "pages";
+  form.elements.customUnit.value = suggestion.goalType === "quantitative" && suggestion.unit === "other" ? suggestion.customUnit : "";
+  for (const input of form.querySelectorAll('input[name="weekdays"]')) input.checked = suggestion.weekdays.includes(Number(input.value));
+  form.elements.weeklyTargetExecutions.value = suggestion.weeklyTargetExecutions;
+  if (suggestion.time) form.elements.time.value = suggestion.time;
+  updateConditionalFields();
 }
 
 document.addEventListener("click", async (event) => {

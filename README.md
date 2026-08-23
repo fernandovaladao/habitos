@@ -27,7 +27,7 @@ A ERS é fonte de verdade para comportamento e regras de negócio. Os protótipo
 
 ## Fundação técnica atual
 
-O projeto contém a fundação do monólito modular, autenticação e perfil, gestão de hábitos e execuções com histórico e notas privadas. Ocorrências são materializadas e fechadas sob demanda, com snapshots temporais e idempotência no Firestore. Pontuação, sequência, conquistas, ranking, envio real de notificações e IA ainda não estão implementados.
+O projeto contém a fundação do monólito modular, autenticação e perfil, gestão de hábitos e execuções com histórico e notas privadas, gamificação, Progresso e Ranking Geral. Ocorrências são materializadas e fechadas sob demanda, com snapshots temporais e idempotência no Firestore. A criação de hábito oferece sugestão opcional por IA sem salvamento automático. Envio real de notificações ainda não está implementado.
 
 ## Requisitos locais
 
@@ -61,6 +61,14 @@ Variáveis obrigatórias:
 - `FIREBASE_WEB_API_KEY`
 - `FIREBASE_AUTH_DOMAIN`
 - `FIREBASE_APP_ID`
+- `OPENAI_API_KEY`
+
+Configuração da sugestão de hábito com IA:
+
+- `OPENAI_MODEL`, inicialmente `gpt-5.6-luna`;
+- `AI_REQUEST_TIMEOUT`, inicialmente `10s`.
+
+A integração usa a OpenAI Responses API com Structured Outputs. Somente título e descrição são enviados pelo backend; a aplicação não persiste nem registra prompts, respostas ou sugestões. Nunca exponha `OPENAI_API_KEY` no frontend ou no repositório. Os testes usam fakes e não chamam a API real.
 
 `FIREBASE_WEB_API_KEY`, `FIREBASE_AUTH_DOMAIN` e `FIREBASE_APP_ID` são configuração pública do Firebase Web SDK, não credenciais administrativas. A configuração administrativa permanece somente no backend.
 

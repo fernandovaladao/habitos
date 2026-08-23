@@ -318,6 +318,13 @@ p { color: var(--muted); font-size: 1.05rem; }
 .ranking-name small { color: var(--orange-500); }
 .privacy-caption { margin-top: 24px; }
 .ranking-cta a { font-weight: 800; }
+.habit-form-actions { display: flex; justify-content: flex-end; gap: 16px; }
+.button--ai { color: var(--orange-500); background: white; border: 2px solid var(--orange-500); }
+.ai-suggestion { margin-top: 22px; padding: 24px; border-color: #ffd2ad; }
+.ai-suggestion dl { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; }
+.ai-suggestion dl > div { padding: 12px; background: var(--surface); border-radius: 12px; }
+.ai-suggestion dt { color: var(--muted); font-size: .85rem; font-weight: 700; }
+.ai-suggestion dd { margin: 6px 0 0; font-weight: 700; }
 
 @media (max-width: 700px) {
   .form-grid, .details-grid { grid-template-columns: 1fr; }
@@ -331,4 +338,6 @@ p { color: var(--muted); font-size: 1.05rem; }
   .ranking-summary { align-items: flex-start; }
   .ranking-row { grid-template-columns: 42px 30px 1fr auto; padding-inline: 12px; }
   .score-rules p { align-items: flex-start; flex-direction: column; gap: 2px; }
+  .habit-form-actions { align-items: stretch; flex-direction: column; }
+  .ai-suggestion dl { grid-template-columns: 1fr; }
 }

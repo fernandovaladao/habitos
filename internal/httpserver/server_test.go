@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -19,6 +20,7 @@ import (
 	"habitos/internal/execution"
 	"habitos/internal/gamification"
 	"habitos/internal/habit"
+	"habitos/internal/habitsuggestion"
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
@@ -104,13 +106,14 @@ func (r *fakeProfileRepository) UpdateDemographics(_ context.Context, uid string
 }
 
 type testApp struct {
-	handler    http.Handler
-	sessions   *fakeSessionManager
-	profiles   *fakeProfileRepository
-	habits     *fakeHabitRepository
-	executions *fakeExecutionRepository
-	notes      *fakeNoteRepository
-	ranking    *fakeRankingRepository
+	handler     http.Handler
+	sessions    *fakeSessionManager
+	profiles    *fakeProfileRepository
+	habits      *fakeHabitRepository
+	executions  *fakeExecutionRepository
+	notes       *fakeNoteRepository
+	ranking     *fakeRankingRepository
+	suggestions *fakeSuggestionProvider
 }
 
 type fakeHabitRepository struct {
@@ -224,6 +227,19 @@ type fakeRankingRepository struct {
 	self     ranking.Entry
 	count    int
 	previous *ranking.Entry
+}
+
+type fakeSuggestionProvider struct {
+	result habitsuggestion.ProviderSuggestion
+	err    error
+	calls  int
+	input  habitsuggestion.ProviderRequest
+}
+
+func (f *fakeSuggestionProvider) Suggest(_ context.Context, input habitsuggestion.ProviderRequest) (habitsuggestion.ProviderSuggestion, error) {
+	f.calls++
+	f.input = input
+	return f.result, f.err
 }
 
 func (r *fakeRankingRepository) Top(_ context.Context, limit int) ([]ranking.Entry, error) {
@@ -350,15 +366,16 @@ func newTestApp(t *testing.T) testApp {
 	habitService := habit.NewService(habits)
 	noteRepo := newFakeNoteRepository()
 	rankingRepo := &fakeRankingRepository{}
+	suggestionProvider := &fakeSuggestionProvider{result: habitsuggestion.ProviderSuggestion{Title: "Ler um pouco", Description: "Comece com uma meta realista.", GoalType: "quantitative", Target: "10", Unit: "pages", Weekdays: []int{1, 3, 5}, WeeklyTargetExecutions: 3}}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo)})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second)})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -438,6 +455,85 @@ func TestHabitCreationAndListingUseAuthenticatedUID(t *testing.T) {
 	app.handler.ServeHTTP(listRecorder, listRequest)
 	if listRecorder.Code != http.StatusOK || strings.Contains(listRecorder.Body.String(), "Segredo") {
 		t.Fatalf("listagem vazou hábito: status=%d", listRecorder.Code)
+	}
+}
+
+func TestHabitSuggestionRequiresSessionCSRFAndSendsOnlyFormText(t *testing.T) {
+	app := newTestApp(t)
+	body := `{"title":"Ler","description":"Criar uma rotina"}`
+	anonymous := httptest.NewRecorder()
+	app.handler.ServeHTTP(anonymous, httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(body)))
+	if anonymous.Code != http.StatusUnauthorized {
+		t.Fatalf("anônimo status=%d", anonymous.Code)
+	}
+
+	withoutCSRF := httptest.NewRecorder()
+	withoutRequest := httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(body))
+	withoutRequest.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(withoutCSRF, withoutRequest)
+	if withoutCSRF.Code != http.StatusForbidden {
+		t.Fatalf("sem CSRF status=%d", withoutCSRF.Code)
+	}
+
+	token, csrfCookie := issueCSRF(t, app.handler)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(body))
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || app.suggestions.calls != 1 || app.suggestions.input != (habitsuggestion.ProviderRequest{Title: "Ler", Description: "Criar uma rotina"}) {
+		t.Fatalf("status=%d entrada=%#v chamadas=%d corpo=%s", recorder.Code, app.suggestions.input, app.suggestions.calls, recorder.Body.String())
+	}
+	for _, forbidden := range []string{"forjado", "privado@example.test", "firebase-user-a", "a@example.com"} {
+		if strings.Contains(recorder.Body.String(), forbidden) {
+			t.Fatalf("resposta expôs %q: %s", forbidden, recorder.Body.String())
+		}
+	}
+
+	unknown := httptest.NewRecorder()
+	unknownRequest := httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(`{"title":"Ler","description":"Criar uma rotina","userId":"forjado"}`))
+	unknownRequest.Header.Set(csrf.HeaderName, token)
+	unknownRequest.AddCookie(csrfCookie)
+	unknownRequest.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(unknown, unknownRequest)
+	if unknown.Code != http.StatusBadRequest || app.suggestions.calls != 1 {
+		t.Fatalf("campo de identidade inesperado foi aceito: status=%d chamadas=%d", unknown.Code, app.suggestions.calls)
+	}
+}
+
+func TestHabitSuggestionReturnsGenericProviderError(t *testing.T) {
+	app := newTestApp(t)
+	app.suggestions.err = errors.New("modelo secreto e corpo do provedor")
+	token, csrfCookie := issueCSRF(t, app.handler)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(`{"title":"Ler","description":"Criar rotina"}`))
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable || strings.Contains(recorder.Body.String(), "modelo secreto") || strings.Contains(recorder.Body.String(), "provedor") {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+}
+
+func TestAISuggestionButtonAppearsOnlyWhenCreatingHabit(t *testing.T) {
+	app := newTestApp(t)
+	session := &http.Cookie{Name: auth.SessionCookieName, Value: "valid"}
+	createRecorder := httptest.NewRecorder()
+	createRequest := httptest.NewRequest(http.MethodGet, "/criar-habito", nil)
+	createRequest.AddCookie(session)
+	app.handler.ServeHTTP(createRecorder, createRequest)
+	if createRecorder.Code != http.StatusOK || !strings.Contains(createRecorder.Body.String(), "Sugerir hábito com IA") {
+		t.Fatalf("criação status=%d", createRecorder.Code)
+	}
+	app.habits.values["habit-a"] = habit.Habit{ID: "habit-a", OwnerUID: "firebase-user-a", Title: "Ler", Description: "Livros", Status: habit.StatusActive}
+	editRecorder := httptest.NewRecorder()
+	editRequest := httptest.NewRequest(http.MethodGet, "/habitos/habit-a/editar", nil)
+	editRequest.AddCookie(session)
+	app.handler.ServeHTTP(editRecorder, editRequest)
+	if editRecorder.Code != http.StatusOK || strings.Contains(editRecorder.Body.String(), "Sugerir hábito com IA") {
+		t.Fatalf("edição status=%d corpo=%s", editRecorder.Code, editRecorder.Body.String())
 	}
 }
 

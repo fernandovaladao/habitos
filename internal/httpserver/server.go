@@ -19,6 +19,7 @@ import (
 	"habitos/internal/execution"
 	"habitos/internal/gamification"
 	"habitos/internal/habit"
+	"habitos/internal/habitsuggestion"
 	"habitos/internal/note"
 	"habitos/internal/profile"
 	"habitos/internal/progress"
@@ -42,13 +43,14 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Sessions   auth.SessionManager
-	Profiles   *profile.Service
-	Habits     *habit.Service
-	Executions *execution.Service
-	Notes      *note.Service
-	Progress   *progress.Service
-	Ranking    *ranking.Service
+	Sessions    auth.SessionManager
+	Profiles    *profile.Service
+	Habits      *habit.Service
+	Executions  *execution.Service
+	Notes       *note.Service
+	Progress    *progress.Service
+	Ranking     *ranking.Service
+	Suggestions *habitsuggestion.Service
 }
 
 type pageData struct {
@@ -88,6 +90,7 @@ type handler struct {
 	notes         *note.Service
 	progress      *progress.Service
 	ranking       *ranking.Service
+	suggestions   *habitsuggestion.Service
 	auth          *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
@@ -121,8 +124,8 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil {
-		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso e ranking são obrigatórias")
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil {
+		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking e sugestões são obrigatórias")
 	}
 
 	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
@@ -145,6 +148,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		notes:         dependencies.Notes,
 		progress:      dependencies.Progress,
 		ranking:       dependencies.Ranking,
+		suggestions:   dependencies.Suggestions,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
@@ -163,6 +167,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("POST /api/profile/ensure", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
 	mux.Handle("PUT /api/profile", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
 	mux.Handle("POST /api/habits", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
+	mux.Handle("POST /api/habit-suggestions", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.suggestHabit))))
 	mux.Handle("PUT /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
 	mux.Handle("POST /api/habits/{id}/duplicate", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.duplicateHabit))))
 	mux.Handle("POST /api/habits/{id}/archive", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
@@ -670,6 +675,26 @@ func (h *handler) createHabit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusCreated, value)
+}
+
+func (h *handler) suggestHabit(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	var request habitsuggestion.Request
+	if decodeJSON(r, &request) != nil {
+		http.Error(w, "Dados para sugestão inválidos.", http.StatusBadRequest)
+		return
+	}
+	value, err := h.suggestions.Suggest(r.Context(), identity, request)
+	if errors.Is(err, habitsuggestion.ErrInvalidRequest) {
+		http.Error(w, "Preencha um título e uma descrição válidos antes de pedir uma sugestão.", http.StatusUnprocessableEntity)
+		return
+	}
+	if err != nil {
+		h.logger.Warn("falha ao gerar sugestão de hábito")
+		http.Error(w, "Não foi possível gerar uma sugestão agora. Tente novamente mais tarde.", http.StatusServiceUnavailable)
+		return
+	}
+	writeJSON(w, http.StatusOK, value)
 }
 func (h *handler) updateHabit(w http.ResponseWriter, r *http.Request) {
 	identity, userProfile, err := h.authenticatedProfile(r)

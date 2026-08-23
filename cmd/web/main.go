@@ -15,6 +15,7 @@ import (
 	"habitos/internal/execution"
 	"habitos/internal/firebaseadmin"
 	"habitos/internal/habit"
+	"habitos/internal/habitsuggestion"
 	"habitos/internal/httpserver"
 	"habitos/internal/note"
 	"habitos/internal/profile"
@@ -48,6 +49,7 @@ func main() {
 	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
 	progressService := progress.NewService(progress.NewFirestoreRepository(clients.Firestore))
 	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
+	suggestionService := habitsuggestion.NewService(habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel}), appConfig.AIRequestTimeout)
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
 		Logger:        logger,
@@ -60,13 +62,14 @@ func main() {
 			AuthEmulatorURL: appConfig.AuthEmulatorURL,
 		},
 	}, httpserver.Dependencies{
-		Sessions:   sessions,
-		Profiles:   profiles,
-		Habits:     habits,
-		Executions: executions,
-		Notes:      notes,
-		Progress:   progressService,
-		Ranking:    rankingService,
+		Sessions:    sessions,
+		Profiles:    profiles,
+		Habits:      habits,
+		Executions:  executions,
+		Notes:       notes,
+		Progress:    progressService,
+		Ranking:     rankingService,
+		Suggestions: suggestionService,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)

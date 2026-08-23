@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 const (
@@ -20,6 +21,9 @@ type Config struct {
 	FirebaseAuthDomain string
 	FirebaseAppID      string
 	AuthEmulatorURL    string
+	OpenAIAPIKey       string
+	OpenAIModel        string
+	AIRequestTimeout   time.Duration
 }
 
 func Load() (Config, error) {
@@ -32,7 +36,14 @@ func Load() (Config, error) {
 		FirebaseWebAPIKey:  os.Getenv("FIREBASE_WEB_API_KEY"),
 		FirebaseAuthDomain: os.Getenv("FIREBASE_AUTH_DOMAIN"),
 		FirebaseAppID:      os.Getenv("FIREBASE_APP_ID"),
+		OpenAIAPIKey:       os.Getenv("OPENAI_API_KEY"),
+		OpenAIModel:        envOrDefault("OPENAI_MODEL", "gpt-5.6-luna"),
 	}
+	requestTimeout, err := time.ParseDuration(envOrDefault("AI_REQUEST_TIMEOUT", "10s"))
+	if err != nil || requestTimeout <= 0 {
+		return Config{}, fmt.Errorf("AI_REQUEST_TIMEOUT deve ser uma duração positiva")
+	}
+	config.AIRequestTimeout = requestTimeout
 
 	if value := os.Getenv("SESSION_COOKIE_SECURE"); value != "" {
 		switch value {
@@ -51,12 +62,13 @@ func Load() (Config, error) {
 		config.AuthEmulatorURL = "http://" + authEmulatorHost
 	}
 
-	missing := make([]string, 0, 4)
+	missing := make([]string, 0, 5)
 	for name, value := range map[string]string{
 		"FIREBASE_PROJECT_ID":  config.FirebaseProjectID,
 		"FIREBASE_WEB_API_KEY": config.FirebaseWebAPIKey,
 		"FIREBASE_AUTH_DOMAIN": config.FirebaseAuthDomain,
 		"FIREBASE_APP_ID":      config.FirebaseAppID,
+		"OPENAI_API_KEY":       config.OpenAIAPIKey,
 	} {
 		if value == "" {
 			missing = append(missing, name)
