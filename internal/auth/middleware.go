@@ -20,10 +20,19 @@ func IdentityFromContext(ctx context.Context) (Identity, bool) {
 
 type Middleware struct {
 	sessions SessionManager
+	accounts AccountState
+}
+
+type AccountState interface {
+	IsDeleting(context.Context, string) (bool, error)
 }
 
 func NewMiddleware(sessions SessionManager) *Middleware {
 	return &Middleware{sessions: sessions}
+}
+
+func NewActiveMiddleware(sessions SessionManager, accounts AccountState) *Middleware {
+	return &Middleware{sessions: sessions, accounts: accounts}
 }
 
 func (m *Middleware) RequireAPI(next http.Handler) http.Handler {
@@ -49,6 +58,17 @@ func (m *Middleware) require(next http.Handler, unauthorized http.HandlerFunc) h
 		if err != nil {
 			unauthorized(w, r)
 			return
+		}
+		if m.accounts != nil {
+			deleting, err := m.accounts.IsDeleting(r.Context(), identity.UID)
+			if err != nil || deleting {
+				if deleting && r.Method == http.MethodGet {
+					http.Redirect(w, r, "/exclusao-conta", http.StatusSeeOther)
+					return
+				}
+				http.Error(w, "A conta está em processo de exclusão.", http.StatusConflict)
+				return
+			}
 		}
 		next.ServeHTTP(w, r.WithContext(WithIdentity(r.Context(), identity)))
 	})

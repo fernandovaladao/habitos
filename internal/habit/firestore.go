@@ -9,6 +9,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/accountstate"
 	"habitos/internal/gamification"
 )
 
@@ -23,6 +24,9 @@ func (r *FirestoreRepository) Create(ctx context.Context, value Habit, version S
 	doc := r.client.Collection("habits").Doc(value.ID)
 	versionDoc := doc.Collection("scheduleVersions").Doc(version.ID)
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, value.OwnerUID); err != nil {
+			return err
+		}
 		if err := tx.Create(doc, value); err != nil {
 			return err
 		}
@@ -101,6 +105,9 @@ func (r *FirestoreRepository) ListScheduleVersions(ctx context.Context, ownerUID
 func (r *FirestoreRepository) Update(ctx context.Context, value Habit, version *ScheduleVersion) error {
 	doc := r.client.Collection("habits").Doc(value.ID)
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, value.OwnerUID); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(doc)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound

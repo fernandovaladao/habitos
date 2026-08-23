@@ -1,0 +1,19 @@
+{{define "account-deletion"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="page-shell auth-shell">
+    <section class="card auth-card" data-account-deletion-progress>
+      <p class="eyebrow">Privacidade e dados</p>
+      <h1>Exclusão em andamento</h1>
+      <p>Seus dados já não aparecem no ranking. Estamos concluindo a remoção permanente.</p>
+      <p class="form-message" data-deletion-progress-message role="status" aria-live="polite">Continuando a exclusão…</p>
+      <button class="button button--primary" type="button" data-continue-deletion>Continuar exclusão</button>
+    </section>
+  </main>
+  <script type="module" src="/static/js/account-deletion.js"></script>
+</body>
+</html>
+{{end}}

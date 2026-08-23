@@ -11,6 +11,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/accountstate"
 	"habitos/internal/gamification"
 	"habitos/internal/habit"
 	"habitos/internal/profile"
@@ -29,6 +30,9 @@ func (r *FirestoreRepository) Ensure(ctx context.Context, value Execution, key s
 	uniqueDoc := r.client.Collection("executionUniqueness").Doc(key)
 	result := value
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, value.OwnerUID); err != nil {
+			return err
+		}
 		habitSnapshot, err := tx.Get(habitDoc)
 		if status.Code(err) == codes.NotFound {
 			return habit.ErrNotFound
@@ -120,6 +124,9 @@ func (r *FirestoreRepository) ApplyResult(ctx context.Context, ownerUID, id stri
 	doc := r.client.Collection("executions").Doc(id)
 	var result Execution
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, ownerUID); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(doc)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound
@@ -174,6 +181,9 @@ func (r *FirestoreRepository) CloseExpired(ctx context.Context, ownerUID, habitI
 		}
 		doc := snapshot.Ref
 		err = r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+			if err := accountstate.AssertActiveTransaction(tx, r.client, ownerUID); err != nil {
+				return err
+			}
 			current, err := tx.Get(doc)
 			if err != nil {
 				return err
@@ -207,6 +217,9 @@ func (r *FirestoreRepository) CloseExpired(ctx context.Context, ownerUID, habitI
 
 func (r *FirestoreRepository) ReconcileHabit(ctx context.Context, ownerUID, habitID string, now time.Time) error {
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, ownerUID); err != nil {
+			return err
+		}
 		return r.reconcileTransaction(ctx, tx, ownerUID, habitID, now, nil)
 	})
 	if err != nil {
@@ -518,6 +531,9 @@ func (r *FirestoreRepository) Cursor(ctx context.Context, ownerUID, habitID stri
 func (r *FirestoreRepository) AdvanceCursor(ctx context.Context, ownerUID, habitID, date string, now time.Time) error {
 	doc := r.client.Collection("habitOccurrenceCursors").Doc(habitID)
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, ownerUID); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(doc)
 		if err == nil {
 			var value struct {

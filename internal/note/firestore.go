@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/accountstate"
 	"sort"
 	"time"
 )
@@ -17,7 +18,13 @@ func NewFirestoreRepository(client *firestore.Client) *FirestoreRepository {
 }
 func (r *FirestoreRepository) NewID() string { return r.client.Collection("notes").NewDoc().ID }
 func (r *FirestoreRepository) Create(ctx context.Context, value Note) (Note, error) {
-	_, err := r.client.Collection("notes").Doc(value.ID).Create(ctx, value)
+	doc := r.client.Collection("notes").Doc(value.ID)
+	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, value.OwnerUID); err != nil {
+			return err
+		}
+		return tx.Create(doc, value)
+	})
 	if err != nil {
 		return Note{}, fmt.Errorf("criar nota: %w", err)
 	}
@@ -62,6 +69,9 @@ func (r *FirestoreRepository) Update(ctx context.Context, owner, id, content str
 	doc := r.client.Collection("notes").Doc(id)
 	var result Note
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, owner); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(doc)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound
@@ -87,6 +97,9 @@ func (r *FirestoreRepository) Update(ctx context.Context, owner, id, content str
 func (r *FirestoreRepository) Delete(ctx context.Context, owner, id string) error {
 	doc := r.client.Collection("notes").Doc(id)
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, owner); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(doc)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound

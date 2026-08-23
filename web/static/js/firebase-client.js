@@ -2,9 +2,11 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/12.17.1/fireba
 import {
   connectAuthEmulator,
   createUserWithEmailAndPassword,
+  EmailAuthProvider,
   getAuth,
   inMemoryPersistence,
   sendPasswordResetEmail,
+  reauthenticateWithCredential,
   setPersistence,
   signInWithEmailAndPassword,
   signOut,
@@ -32,7 +34,7 @@ export async function firebaseAuth() {
   return authPromise;
 }
 
-export { createUserWithEmailAndPassword, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updatePassword };
+export { createUserWithEmailAndPassword, EmailAuthProvider, reauthenticateWithCredential, sendPasswordResetEmail, signInWithEmailAndPassword, signOut, updatePassword };
 
 export async function csrfToken() {
   const response = await fetch("/api/auth/csrf", { credentials: "same-origin" });

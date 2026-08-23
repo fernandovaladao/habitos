@@ -21,3 +21,5 @@ Logs do processo poderão registrar identificadores técnicos e estado das etapa
 - Referências e objetos de Storage precisam ser removidos explicitamente.
 - Índices, projeções e agregados não podem manter o usuário no ranking após o início confirmado da exclusão.
 - Testes devem cobrir repetição do processo e falhas em etapas intermediárias.
+
+O desenho operacional, o inventário completo, a barreira transacional e a política de retomada foram concretizados no ADR 0015.

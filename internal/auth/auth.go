@@ -6,7 +6,10 @@ import (
 	"time"
 )
 
-var ErrInvalidSession = errors.New("sessão inválida")
+var (
+	ErrInvalidSession = errors.New("sessão inválida")
+	ErrUserNotFound   = errors.New("usuário não encontrado")
+)
 
 const SessionDuration = 5 * 24 * time.Hour
 

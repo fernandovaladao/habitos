@@ -8,6 +8,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/accountstate"
 	"habitos/internal/ranking"
 )
 
@@ -23,6 +24,9 @@ func (r *FirestoreRepository) Ensure(ctx context.Context, candidate Profile) (Pr
 	document := r.client.Collection("users").Doc(candidate.UID)
 	result := candidate
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, transaction *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(transaction, r.client, candidate.UID); err != nil {
+			return err
+		}
 		snapshot, err := transaction.Get(document)
 		exists := err == nil
 		var legacyUpdates []firestore.Update
@@ -89,6 +93,9 @@ func (r *FirestoreRepository) Update(ctx context.Context, uid string, update Upd
 	document := r.client.Collection("users").Doc(uid)
 	var result Profile
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, uid); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(document)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound
@@ -126,6 +133,9 @@ func (r *FirestoreRepository) UpdateDemographics(ctx context.Context, uid string
 	document := r.client.Collection("users").Doc(uid)
 	var result Profile
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, uid); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(document)
 		if status.Code(err) == codes.NotFound {
 			return ErrNotFound

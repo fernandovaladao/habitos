@@ -1,4 +1,4 @@
-import { csrfToken, updateProfile } from "/static/js/firebase-client.js";
+import { csrfToken, EmailAuthProvider, firebaseAuth, reauthenticateWithCredential, signOut, updateProfile } from "/static/js/firebase-client.js";
 
 const form = document.querySelector("[data-profile-form]");
 const message = form?.querySelector("[data-form-message]");
@@ -83,5 +83,38 @@ document.querySelector("[data-remove-photo]")?.addEventListener("click", async (
   } catch (error) {
     avatarMessage.textContent = error.message;
     event.currentTarget.disabled = false;
+  }
+});
+
+const deletionDialog = document.querySelector("[data-account-deletion-dialog]");
+const deletionForm = document.querySelector("[data-account-deletion-form]");
+document.querySelector("[data-open-account-deletion]")?.addEventListener("click", () => deletionDialog.showModal());
+document.querySelector("[data-cancel-account-deletion]")?.addEventListener("click", () => deletionDialog.close());
+
+if (deletionForm) deletionForm.addEventListener("submit", async (event) => {
+  event.preventDefault();
+  const button = deletionForm.querySelector("button[type=submit]");
+  const message = deletionForm.querySelector("[data-deletion-message]");
+  button.disabled = true;
+  message.textContent = "Confirmando sua identidade…";
+  try {
+    const firebase = await firebaseAuth();
+    const user = firebase.currentUser;
+    if (!user?.email) throw new Error("Entre novamente para excluir sua conta.");
+    await reauthenticateWithCredential(user, EmailAuthProvider.credential(user.email, deletionForm.elements.password.value));
+    const idToken = await user.getIdToken(true);
+    const csrf = await csrfToken();
+    const response = await fetch("/api/account/deletion/start", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: JSON.stringify({ confirmation: deletionForm.elements.confirmation.value, idToken }) });
+    if (!response.ok && response.status !== 202) throw new Error((await response.text()).trim() || "Não foi possível iniciar a exclusão.");
+    const result = await response.json();
+    if (result.complete) {
+      try { await signOut(firebase); } catch {}
+      window.location.assign("/?conta-excluida=1");
+      return;
+    }
+    window.location.assign("/exclusao-conta");
+  } catch (error) {
+    message.textContent = error.message || "Não foi possível iniciar a exclusão.";
+    button.disabled = false;
   }
 });

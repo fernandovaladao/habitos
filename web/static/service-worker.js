@@ -1,10 +1,11 @@
-const CACHE_NAME = "habitos-static-v2";
+const CACHE_NAME = "habitos-static-v3";
 const STATIC_ASSETS = [
   "/static/css/app.css",
   "/static/js/app.js",
   "/static/js/firebase-client.js",
   "/static/js/auth.js",
   "/static/js/profile.js",
+	"/static/js/account-deletion.js",
   "/static/js/habits.js",
   "/static/js/password.js",
   "/static/js/session-actions.js",

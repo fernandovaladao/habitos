@@ -159,6 +159,14 @@ npx firebase-tools@15.25.1 emulators:exec \
 
 O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade e testa perfil, foto privada, regras do Storage, hábitos, versionamento de agenda, materialização e registro concorrentes de execuções e CRUD autorizado de notas.
 
+O Firestore Emulator não executa nem comprova políticas TTL. Em produção, `firestore.indexes.json` habilita `expiresAt` como TTL de `accountDeletions`; depois de publicar a configuração, confira o estado com:
+
+```bash
+gcloud firestore fields ttls list --collection-group=accountDeletions
+```
+
+Esse TTL de sete dias é apenas uma salvaguarda para marcador residual depois que o Firebase Auth já tiver sido excluído. O fluxo normal remove o marcador explicitamente e nunca depende do TTL.
+
 `APP_ENV=production` torna o cookie de sessão obrigatoriamente seguro. Em desenvolvimento HTTP, use `SESSION_COOKIE_SECURE=false`. Sessões duram 5 dias.
 
 ## Executar localmente

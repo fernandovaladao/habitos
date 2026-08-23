@@ -10,6 +10,8 @@ import (
 	"syscall"
 	"time"
 
+	"habitos/internal/accountdeletion"
+	"habitos/internal/accountstate"
 	"habitos/internal/auth"
 	"habitos/internal/avatar"
 	"habitos/internal/config"
@@ -52,6 +54,7 @@ func main() {
 	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
 	suggestionService := habitsuggestion.NewService(habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel}), appConfig.AIRequestTimeout)
 	avatarService := avatar.NewService(avatar.NewFirestoreRepository(clients.Firestore), avatar.NewStorage(clients.Storage))
+	deletionService := accountdeletion.NewService(accountdeletion.NewFirestoreRepository(clients.Firestore), accountdeletion.NewStorage(clients.Storage), sessions, accountdeletion.NewFirebaseAccountStore(clients.Auth))
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
 		Logger:        logger,
@@ -64,15 +67,17 @@ func main() {
 			AuthEmulatorURL: appConfig.AuthEmulatorURL,
 		},
 	}, httpserver.Dependencies{
-		Sessions:    sessions,
-		Profiles:    profiles,
-		Habits:      habits,
-		Executions:  executions,
-		Notes:       notes,
-		Progress:    progressService,
-		Ranking:     rankingService,
-		Suggestions: suggestionService,
-		Avatars:     avatarService,
+		Sessions:     sessions,
+		Profiles:     profiles,
+		Habits:       habits,
+		Executions:   executions,
+		Notes:        notes,
+		Progress:     progressService,
+		Ranking:      rankingService,
+		Suggestions:  suggestionService,
+		Avatars:      avatarService,
+		Deletion:     deletionService,
+		AccountState: accountstate.NewFirestoreChecker(clients.Firestore),
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)

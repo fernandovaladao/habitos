@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -15,6 +16,8 @@ import (
 	"strings"
 	"time"
 
+	"habitos/internal/accountdeletion"
+	"habitos/internal/accountstate"
 	"habitos/internal/auth"
 	"habitos/internal/avatar"
 	"habitos/internal/csrf"
@@ -45,15 +48,22 @@ type Config struct {
 }
 
 type Dependencies struct {
-	Sessions    auth.SessionManager
-	Profiles    *profile.Service
-	Habits      *habit.Service
-	Executions  *execution.Service
-	Notes       *note.Service
-	Progress    *progress.Service
-	Ranking     *ranking.Service
-	Suggestions *habitsuggestion.Service
-	Avatars     *avatar.Service
+	Sessions     auth.SessionManager
+	Profiles     *profile.Service
+	Habits       *habit.Service
+	Executions   *execution.Service
+	Notes        *note.Service
+	Progress     *progress.Service
+	Ranking      *ranking.Service
+	Suggestions  *habitsuggestion.Service
+	Avatars      *avatar.Service
+	Deletion     AccountDeletion
+	AccountState accountstate.Checker
+}
+
+type AccountDeletion interface {
+	Start(context.Context, auth.Identity, string, string) (accountdeletion.Result, error)
+	Continue(context.Context, auth.Identity) (accountdeletion.Result, error)
 }
 
 type pageData struct {
@@ -96,7 +106,9 @@ type handler struct {
 	ranking       *ranking.Service
 	suggestions   *habitsuggestion.Service
 	avatars       *avatar.Service
+	deletion      AccountDeletion
 	auth          *auth.Middleware
+	activeAuth    *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
 	firebaseWeb   FirebaseWebConfig
@@ -129,7 +141,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil || dependencies.Avatars == nil {
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil || dependencies.Avatars == nil || dependencies.Deletion == nil || dependencies.AccountState == nil {
 		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking, sugestões e avatares são obrigatórias")
 	}
 
@@ -155,7 +167,9 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		ranking:       dependencies.Ranking,
 		suggestions:   dependencies.Suggestions,
 		avatars:       dependencies.Avatars,
+		deletion:      dependencies.Deletion,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
+		activeAuth:    auth.NewActiveMiddleware(dependencies.Sessions, dependencies.AccountState),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
 		firebaseWeb:   config.FirebaseWeb,
@@ -170,37 +184,40 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.HandleFunc("GET /api/auth/csrf", h.issueCSRF)
 	mux.Handle("POST /api/auth/session", h.csrf.Protect(http.HandlerFunc(h.createSession)))
 	mux.Handle("POST /api/auth/logout", h.csrf.Protect(http.HandlerFunc(h.logout)))
-	mux.Handle("POST /api/profile/ensure", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
-	mux.Handle("PUT /api/profile", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
-	mux.Handle("POST /api/profile/photo", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.uploadProfilePhoto))))
-	mux.Handle("DELETE /api/profile/photo", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.removeProfilePhoto))))
-	mux.Handle("PUT /api/profile/avatar/internal", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.selectInternalAvatar))))
-	mux.Handle("GET /media/avatars/{id}", h.auth.RequireAPI(http.HandlerFunc(h.profilePhoto)))
-	mux.Handle("POST /api/habits", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
-	mux.Handle("POST /api/habit-suggestions", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.suggestHabit))))
-	mux.Handle("PUT /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
-	mux.Handle("POST /api/habits/{id}/duplicate", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.duplicateHabit))))
-	mux.Handle("POST /api/habits/{id}/archive", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
-	mux.Handle("POST /api/habits/{id}/reactivate", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.reactivateHabit))))
-	mux.Handle("DELETE /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteHabit))))
-	mux.Handle("POST /api/executions/{id}/simple", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordSimple))))
-	mux.Handle("POST /api/executions/{id}/quantitative", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordQuantitative))))
-	mux.Handle("POST /api/habits/{id}/notes", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createNote))))
-	mux.Handle("PUT /api/notes/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateNote))))
-	mux.Handle("DELETE /api/notes/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteNote))))
+	mux.Handle("POST /api/account/deletion/start", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.startAccountDeletion))))
+	mux.Handle("POST /api/account/deletion/continue", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.continueAccountDeletion))))
+	mux.Handle("POST /api/profile/ensure", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
+	mux.Handle("PUT /api/profile", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
+	mux.Handle("POST /api/profile/photo", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.uploadProfilePhoto))))
+	mux.Handle("DELETE /api/profile/photo", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.removeProfilePhoto))))
+	mux.Handle("PUT /api/profile/avatar/internal", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.selectInternalAvatar))))
+	mux.Handle("GET /media/avatars/{id}", h.activeAuth.RequireAPI(http.HandlerFunc(h.profilePhoto)))
+	mux.Handle("POST /api/habits", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
+	mux.Handle("POST /api/habit-suggestions", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.suggestHabit))))
+	mux.Handle("PUT /api/habits/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
+	mux.Handle("POST /api/habits/{id}/duplicate", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.duplicateHabit))))
+	mux.Handle("POST /api/habits/{id}/archive", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
+	mux.Handle("POST /api/habits/{id}/reactivate", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.reactivateHabit))))
+	mux.Handle("DELETE /api/habits/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteHabit))))
+	mux.Handle("POST /api/executions/{id}/simple", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordSimple))))
+	mux.Handle("POST /api/executions/{id}/quantitative", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordQuantitative))))
+	mux.Handle("POST /api/habits/{id}/notes", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createNote))))
+	mux.Handle("PUT /api/notes/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateNote))))
+	mux.Handle("DELETE /api/notes/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteNote))))
 
 	mux.HandleFunc("GET /{$}", h.home)
 	mux.HandleFunc("GET /entrar", h.loginPage)
 	mux.HandleFunc("GET /cadastro", h.signupPage)
 	mux.HandleFunc("GET /recuperar-senha", h.passwordResetPage)
-	mux.Handle("GET /alterar-senha", h.auth.RequirePage(http.HandlerFunc(h.changePasswordPage)))
-	mux.Handle("GET /perfil", h.auth.RequirePage(http.HandlerFunc(h.profilePage)))
-	mux.Handle("GET /criar-habito", h.auth.RequirePage(http.HandlerFunc(h.createHabitPage)))
-	mux.Handle("GET /meus-habitos", h.auth.RequirePage(http.HandlerFunc(h.habitsPage)))
-	mux.Handle("GET /habitos/{id}", h.auth.RequirePage(http.HandlerFunc(h.habitDetailsPage)))
-	mux.Handle("GET /habitos/{id}/editar", h.auth.RequirePage(http.HandlerFunc(h.editHabitPage)))
-	mux.Handle("GET /progresso", h.auth.RequirePage(http.HandlerFunc(h.progressPage)))
-	mux.Handle("GET /recompensas", h.auth.RequirePage(http.HandlerFunc(h.rewardsPage)))
+	mux.Handle("GET /exclusao-conta", h.auth.RequirePage(http.HandlerFunc(h.accountDeletionPage)))
+	mux.Handle("GET /alterar-senha", h.activeAuth.RequirePage(http.HandlerFunc(h.changePasswordPage)))
+	mux.Handle("GET /perfil", h.activeAuth.RequirePage(http.HandlerFunc(h.profilePage)))
+	mux.Handle("GET /criar-habito", h.activeAuth.RequirePage(http.HandlerFunc(h.createHabitPage)))
+	mux.Handle("GET /meus-habitos", h.activeAuth.RequirePage(http.HandlerFunc(h.habitsPage)))
+	mux.Handle("GET /habitos/{id}", h.activeAuth.RequirePage(http.HandlerFunc(h.habitDetailsPage)))
+	mux.Handle("GET /habitos/{id}/editar", h.activeAuth.RequirePage(http.HandlerFunc(h.editHabitPage)))
+	mux.Handle("GET /progresso", h.activeAuth.RequirePage(http.HandlerFunc(h.progressPage)))
+	mux.Handle("GET /recompensas", h.activeAuth.RequirePage(http.HandlerFunc(h.rewardsPage)))
 	mux.HandleFunc("GET /aprenda-4rs", h.publicPlaceholder(pageData{
 		Title: "Aprenda os 4 Rs", Description: "O conteúdo completo sobre os 4 Rs será disponibilizado em uma próxima etapa.", Path: "/aprenda-4rs",
 	}))
@@ -547,6 +564,11 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) logout(w http.ResponseWriter, _ *http.Request) {
+	h.clearSession(w)
+	writeJSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
+}
+
+func (h *handler) clearSession(w http.ResponseWriter) {
 	http.SetCookie(w, &http.Cookie{
 		Name:     auth.SessionCookieName,
 		Value:    "",
@@ -557,7 +579,53 @@ func (h *handler) logout(w http.ResponseWriter, _ *http.Request) {
 		SameSite: http.SameSiteLaxMode,
 	})
 	h.csrf.Clear(w)
-	writeJSON(w, http.StatusOK, map[string]string{"status": "signed_out"})
+}
+
+func (h *handler) startAccountDeletion(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	var input struct {
+		Confirmation string `json:"confirmation"`
+		IDToken      string `json:"idToken"`
+	}
+	if decodeJSON(r, &input) != nil {
+		http.Error(w, "Confirmação inválida.", http.StatusBadRequest)
+		return
+	}
+	result, err := h.deletion.Start(r.Context(), identity, input.Confirmation, input.IDToken)
+	if errors.Is(err, accountdeletion.ErrInvalidConfirmation) {
+		http.Error(w, "Digite EXCLUIR MINHA CONTA para confirmar.", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, auth.ErrInvalidSession) || errors.Is(err, accountdeletion.ErrIdentityMismatch) {
+		http.Error(w, "Autenticação recente necessária.", http.StatusUnauthorized)
+		return
+	}
+	h.writeDeletionResult(w, result, err)
+}
+
+func (h *handler) continueAccountDeletion(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	result, err := h.deletion.Continue(r.Context(), identity)
+	h.writeDeletionResult(w, result, err)
+}
+
+func (h *handler) writeDeletionResult(w http.ResponseWriter, result accountdeletion.Result, err error) {
+	if err != nil {
+		h.logger.Error("falha na exclusão da conta", "stage", result.Stage, "code", "deletion_step_failed")
+		http.Error(w, "Não foi possível continuar a exclusão agora.", http.StatusServiceUnavailable)
+		return
+	}
+	if result.Complete {
+		h.clearSession(w)
+		writeJSON(w, http.StatusOK, result)
+		return
+	}
+	writeJSON(w, http.StatusAccepted, result)
+}
+
+func (h *handler) accountDeletionPage(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	h.render(w, http.StatusOK, "account-deletion", pageData{Title: "Exclusão da conta", Description: "Sua exclusão está em andamento.", Authenticated: true, Email: identity.Email, FirebaseEnabled: true})
 }
 
 func (h *handler) ensureProfile(w http.ResponseWriter, r *http.Request) {

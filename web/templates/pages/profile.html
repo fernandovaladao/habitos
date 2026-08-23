@@ -73,9 +73,28 @@
         <a href="/alterar-senha">Alterar senha</a>
       </section>
 
+      <section class="card profile-card deletion-card">
+        <h2>Privacidade e dados</h2>
+        <p><strong>Excluir conta e todos os dados</strong></p>
+        <p>A exclusão é permanente e exige confirmação.</p>
+        <button class="button danger" type="button" data-open-account-deletion>Excluir tudo</button>
+      </section>
+
       <p class="form-message" data-form-message role="status" aria-live="polite"></p>
       <button class="button button--primary" type="submit">Salvar perfil e preferências</button>
     </form>
+    <dialog class="deletion-dialog" data-account-deletion-dialog>
+      <form method="dialog" data-account-deletion-form>
+        <h2>Excluir permanentemente?</h2>
+        <p>Perfil, hábitos, execuções, notas, conquistas, ranking e fotos serão removidos. Depois de iniciar, não será possível cancelar.</p>
+        <label for="deletion-confirmation">Digite <strong>EXCLUIR MINHA CONTA</strong></label>
+        <input id="deletion-confirmation" name="confirmation" autocomplete="off" required>
+        <label for="deletion-password">Confirme sua senha</label>
+        <input id="deletion-password" name="password" type="password" autocomplete="current-password" required>
+        <p class="form-message" data-deletion-message role="status" aria-live="polite"></p>
+        <div class="form-actions"><button class="button button--secondary" value="cancel" type="button" data-cancel-account-deletion>Cancelar</button><button class="button danger" type="submit">Excluir permanentemente</button></div>
+      </form>
+    </dialog>
   </main>
   {{template "navigation" .}}
   <script type="module" src="/static/js/profile.js"></script>

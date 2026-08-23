@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	"habitos/internal/accountdeletion"
 	"habitos/internal/auth"
 	"habitos/internal/avatar"
 	"habitos/internal/csrf"
@@ -36,6 +37,28 @@ type fakeSessionManager struct {
 	verifyErr       error
 	createdDuration time.Duration
 	createdIDToken  string
+}
+
+type fakeAccountState struct{ deleting bool }
+
+func (f *fakeAccountState) IsDeleting(context.Context, string) (bool, error) { return f.deleting, nil }
+
+type fakeAccountDeletion struct {
+	startResult    accountdeletion.Result
+	continueResult accountdeletion.Result
+	err            error
+	identity       auth.Identity
+	confirmation   string
+	idToken        string
+}
+
+func (f *fakeAccountDeletion) Start(_ context.Context, identity auth.Identity, confirmation, idToken string) (accountdeletion.Result, error) {
+	f.identity, f.confirmation, f.idToken = identity, confirmation, idToken
+	return f.startResult, f.err
+}
+func (f *fakeAccountDeletion) Continue(_ context.Context, identity auth.Identity) (accountdeletion.Result, error) {
+	f.identity = identity
+	return f.continueResult, f.err
 }
 
 func (f *fakeSessionManager) CreateSession(_ context.Context, idToken string, duration time.Duration) (string, error) {
@@ -113,16 +136,18 @@ func (r *fakeProfileRepository) UpdateDemographics(_ context.Context, uid string
 }
 
 type testApp struct {
-	handler     http.Handler
-	sessions    *fakeSessionManager
-	profiles    *fakeProfileRepository
-	habits      *fakeHabitRepository
-	executions  *fakeExecutionRepository
-	notes       *fakeNoteRepository
-	ranking     *fakeRankingRepository
-	suggestions *fakeSuggestionProvider
-	avatarRepo  *fakeAvatarRepository
-	avatarStore *fakeAvatarStore
+	handler      http.Handler
+	sessions     *fakeSessionManager
+	profiles     *fakeProfileRepository
+	habits       *fakeHabitRepository
+	executions   *fakeExecutionRepository
+	notes        *fakeNoteRepository
+	ranking      *fakeRankingRepository
+	suggestions  *fakeSuggestionProvider
+	avatarRepo   *fakeAvatarRepository
+	avatarStore  *fakeAvatarStore
+	deletion     *fakeAccountDeletion
+	accountState *fakeAccountState
 }
 
 type fakeAvatarRepository struct {
@@ -443,15 +468,17 @@ func newTestApp(t *testing.T) testApp {
 	suggestionProvider := &fakeSuggestionProvider{result: habitsuggestion.ProviderSuggestion{Title: "Ler um pouco", Description: "Comece com uma meta realista.", GoalType: "quantitative", Target: "10", Unit: "pages", Weekdays: []int{1, 3, 5}, WeeklyTargetExecutions: 3}}
 	avatarRepo := &fakeAvatarRepository{profiles: profiles, media: map[string]avatar.Media{}}
 	avatarStore := &fakeAvatarStore{values: map[string][]byte{}}
+	deletion := &fakeAccountDeletion{}
+	accountState := &fakeAccountState{}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore)})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore), Deletion: deletion, AccountState: accountState})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore, deletion: deletion, accountState: accountState}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -1001,6 +1028,74 @@ func TestProfileShowsRealPositionOnlyForOptIn(t *testing.T) {
 	app.handler.ServeHTTP(recorder, request)
 	if strings.Contains(recorder.Body.String(), "9º no ranking geral") {
 		t.Fatal("posição exibida para usuário sem opt-in")
+	}
+}
+
+func TestAccountDeletionStartUsesLiteralConfirmationAndRecentToken(t *testing.T) {
+	app := newTestApp(t)
+	app.deletion.startResult = accountdeletion.Result{Stage: string(accountdeletion.StageUniqueness)}
+	token, csrfCookie := issueCSRF(t, app.handler)
+	request := httptest.NewRequest(http.MethodPost, "/api/account/deletion/start", strings.NewReader(`{"confirmation":"EXCLUIR MINHA CONTA","idToken":"recent-token"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+	if app.deletion.confirmation != accountdeletion.ConfirmationPhrase || app.deletion.idToken != "recent-token" || app.deletion.identity.UID != app.sessions.identity.UID {
+		t.Fatalf("entrada da exclusão = %#v", app.deletion)
+	}
+}
+
+func TestAccountDeletionCompletionClearsSessionAndCSRF(t *testing.T) {
+	app := newTestApp(t)
+	app.deletion.continueResult = accountdeletion.Result{Complete: true}
+	token, csrfCookie := issueCSRF(t, app.handler)
+	request := httptest.NewRequest(http.MethodPost, "/api/account/deletion/continue", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+	cleared := map[string]bool{}
+	for _, cookie := range recorder.Result().Cookies() {
+		if cookie.MaxAge < 0 {
+			cleared[cookie.Name] = true
+		}
+	}
+	if !cleared[auth.SessionCookieName] || !cleared[csrf.CookieName] {
+		t.Fatalf("cookies removidos = %#v", cleared)
+	}
+}
+
+func TestDeletingAccountCannotUseNormalRoutesButCanContinue(t *testing.T) {
+	app := newTestApp(t)
+	app.accountState.deleting = true
+	request := httptest.NewRequest(http.MethodPost, "/api/profile/ensure", strings.NewReader(`{"timezone":"UTC"}`))
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusConflict {
+		t.Fatalf("rota funcional status=%d", recorder.Code)
+	}
+
+	token, csrfCookie := issueCSRF(t, app.handler)
+	request = httptest.NewRequest(http.MethodPost, "/api/account/deletion/continue", strings.NewReader(`{}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder = httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusAccepted {
+		t.Fatalf("continuação status=%d corpo=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

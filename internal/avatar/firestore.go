@@ -10,6 +10,7 @@ import (
 	"cloud.google.com/go/firestore"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/accountstate"
 	"habitos/internal/profile"
 	"habitos/internal/ranking"
 )
@@ -32,6 +33,9 @@ func (r *FirestoreRepository) mutate(ctx context.Context, uid string, media *Med
 	userRef := r.client.Collection("users").Doc(uid)
 	oldPath := ""
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, tx *firestore.Transaction) error {
+		if err := accountstate.AssertActiveTransaction(tx, r.client, uid); err != nil {
+			return err
+		}
 		snapshot, err := tx.Get(userRef)
 		if status.Code(err) == codes.NotFound {
 			return profile.ErrNotFound

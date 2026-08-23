@@ -56,3 +56,20 @@ func TestCreateSessionRequiresAuthenticationWithinFiveMinutes(t *testing.T) {
 		})
 	}
 }
+
+func TestVerifyRecentIDTokenReturnsOnlyVerifiedIdentity(t *testing.T) {
+	now := time.Date(2026, time.August, 23, 15, 0, 0, 0, time.UTC)
+	client := &fakeFirebaseClient{token: &firebaseauth.Token{
+		UID:      "firebase-user",
+		AuthTime: now.Add(-time.Minute).Unix(),
+		Claims:   map[string]interface{}{"email": "verified@example.com"},
+	}}
+	manager := &FirebaseSessionManager{client: client, now: func() time.Time { return now }}
+	identity, err := manager.VerifyRecentIDToken(context.Background(), "id-token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if identity.UID != "firebase-user" || identity.Email != "verified@example.com" {
+		t.Fatalf("identidade = %#v", identity)
+	}
+}

@@ -26,23 +26,43 @@ type firebaseClient interface {
 const maxAuthenticationAge = 5 * time.Minute
 
 func (m *FirebaseSessionManager) CreateSession(ctx context.Context, idToken string, duration time.Duration) (string, error) {
-	if idToken == "" {
-		return "", ErrInvalidSession
-	}
-	token, err := m.client.VerifyIDToken(ctx, idToken)
+	_, err := m.verifyRecentToken(ctx, idToken)
 	if err != nil {
-		return "", fmt.Errorf("validar ID token: %w", ErrInvalidSession)
-	}
-	authenticatedAt := time.Unix(token.AuthTime, 0)
-	now := m.now()
-	if token.AuthTime <= 0 || authenticatedAt.After(now) || now.Sub(authenticatedAt) > maxAuthenticationAge {
-		return "", fmt.Errorf("autenticação recente necessária: %w", ErrInvalidSession)
+		return "", err
 	}
 	cookie, err := m.client.SessionCookie(ctx, idToken, duration)
 	if err != nil {
 		return "", fmt.Errorf("criar cookie de sessão: %w", err)
 	}
 	return cookie, nil
+}
+
+func (m *FirebaseSessionManager) VerifyRecentIDToken(ctx context.Context, idToken string) (Identity, error) {
+	token, err := m.verifyRecentToken(ctx, idToken)
+	if err != nil {
+		return Identity{}, err
+	}
+	email, _ := token.Claims["email"].(string)
+	if token.UID == "" || email == "" {
+		return Identity{}, ErrInvalidSession
+	}
+	return Identity{UID: token.UID, Email: email}, nil
+}
+
+func (m *FirebaseSessionManager) verifyRecentToken(ctx context.Context, idToken string) (*firebaseauth.Token, error) {
+	if idToken == "" {
+		return nil, ErrInvalidSession
+	}
+	token, err := m.client.VerifyIDToken(ctx, idToken)
+	if err != nil {
+		return nil, fmt.Errorf("validar ID token: %w", ErrInvalidSession)
+	}
+	authenticatedAt := time.Unix(token.AuthTime, 0)
+	now := m.now()
+	if token.AuthTime <= 0 || authenticatedAt.After(now) || now.Sub(authenticatedAt) > maxAuthenticationAge {
+		return nil, fmt.Errorf("autenticação recente necessária: %w", ErrInvalidSession)
+	}
+	return token, nil
 }
 
 func (m *FirebaseSessionManager) VerifySession(ctx context.Context, sessionCookie string) (Identity, error) {
