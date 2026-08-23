@@ -181,6 +181,7 @@ type testApp struct {
 	deletion     *fakeAccountDeletion
 	accountState *fakeAccountState
 	reminders    *fakeReminderService
+	progress     *fakeProgressRepository
 }
 
 type fakeAvatarRepository struct {
@@ -312,6 +313,15 @@ func (r *fakeExecutionRepository) ApplyResult(_ context.Context, uid, id string,
 	return v, nil
 }
 func (r *fakeExecutionRepository) CloseExpired(_ context.Context, uid, hid string, now time.Time) error {
+	for id, value := range r.values {
+		if value.OwnerUID == uid && value.HabitID == hid && value.Status == execution.StatusPending && !now.Before(value.RegistrationDeadline) {
+			closedAt := value.RegistrationDeadline
+			value.Status = execution.StatusNotDone
+			value.ClosedAt = &closedAt
+			value.UpdatedAt = now
+			r.values[id] = value
+		}
+	}
 	return nil
 }
 func (r *fakeExecutionRepository) Cursor(_ context.Context, uid, hid string) (string, error) {
@@ -336,10 +346,24 @@ type fakeNoteRepository struct {
 	next   int
 }
 
-type fakeProgressRepository struct{}
+type fakeProgressRepository struct {
+	executions       []execution.Execution
+	executionQueries int
+	source           *fakeExecutionRepository
+}
 
-func (*fakeProgressRepository) Executions(context.Context, string, string, string) ([]execution.Execution, error) {
-	return nil, nil
+func (r *fakeProgressRepository) Executions(_ context.Context, uid, startDate, endDate string) ([]execution.Execution, error) {
+	r.executionQueries++
+	if r.source != nil {
+		values := make([]execution.Execution, 0, len(r.source.values))
+		for _, value := range r.source.values {
+			if value.OwnerUID == uid && value.ScheduledDate >= startDate && value.ScheduledDate <= endDate {
+				values = append(values, value)
+			}
+		}
+		return values, nil
+	}
+	return r.executions, nil
 }
 func (*fakeProgressRepository) BonusAwards(context.Context, string, string, string) ([]gamification.BonusAward, error) {
 	return nil, nil
@@ -504,15 +528,16 @@ func newTestApp(t *testing.T) testApp {
 	deletion := &fakeAccountDeletion{}
 	accountState := &fakeAccountState{}
 	reminders := &fakeReminderService{}
+	progressRepo := &fakeProgressRepository{}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore), Deletion: deletion, AccountState: accountState, Reminders: reminders})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(progressRepo), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore), Deletion: deletion, AccountState: accountState, Reminders: reminders})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore, deletion: deletion, accountState: accountState, reminders: reminders}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore, deletion: deletion, accountState: accountState, reminders: reminders, progress: progressRepo}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -552,6 +577,11 @@ func TestHabitDetailsSynchronizesBeforeReturningHistory(t *testing.T) {
 	}
 	if len(app.executions.values) != 1 {
 		t.Fatalf("histórico retornado sem sincronizar: execuções=%d", len(app.executions.values))
+	}
+	for _, expected := range []string{"Progresso nesta semana", "Os 4 Rs neste hábito", "Calendário e horários", "Estatísticas", "Lembretes", "Ajustar meta", "/progresso?periodo=week#por-habito"} {
+		if !strings.Contains(recorder.Body.String(), expected) {
+			t.Errorf("detalhes não contém %q", expected)
+		}
 	}
 	for _, value := range app.executions.values {
 		if value.ScheduledDate != today {
@@ -654,6 +684,20 @@ func TestHabitSuggestionReturnsGenericProviderError(t *testing.T) {
 	}
 }
 
+func TestHabitSuggestionRejectsExplicitDangerWithoutCallingProvider(t *testing.T) {
+	app := newTestApp(t)
+	token, csrfCookie := issueCSRF(t, app.handler)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodPost, "/api/habit-suggestions", strings.NewReader(`{"title":"Rotina","description":"Treinar até desmaiar"}`))
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusServiceUnavailable || app.suggestions.calls != 0 || strings.Contains(recorder.Body.String(), "desmaiar") {
+		t.Fatalf("status=%d chamadas=%d corpo=%s", recorder.Code, app.suggestions.calls, recorder.Body.String())
+	}
+}
+
 func TestAISuggestionButtonAppearsOnlyWhenCreatingHabit(t *testing.T) {
 	app := newTestApp(t)
 	session := &http.Cookie{Name: auth.SessionCookieName, Value: "valid"}
@@ -661,7 +705,7 @@ func TestAISuggestionButtonAppearsOnlyWhenCreatingHabit(t *testing.T) {
 	createRequest := httptest.NewRequest(http.MethodGet, "/criar-habito", nil)
 	createRequest.AddCookie(session)
 	app.handler.ServeHTTP(createRecorder, createRequest)
-	if createRecorder.Code != http.StatusOK || !strings.Contains(createRecorder.Body.String(), "Sugerir hábito com IA") {
+	if createRecorder.Code != http.StatusOK || !strings.Contains(createRecorder.Body.String(), "Sugerir hábito com IA") || !strings.Contains(createRecorder.Body.String(), "não substituem orientação de profissionais de saúde") {
 		t.Fatalf("criação status=%d", createRecorder.Code)
 	}
 	app.habits.values["habit-a"] = habit.Habit{ID: "habit-a", OwnerUID: "firebase-user-a", Title: "Ler", Description: "Livros", Status: habit.StatusActive}
@@ -741,6 +785,77 @@ func TestPublicRoutes(t *testing.T) {
 				t.Fatalf("status = %d, esperado %d", recorder.Code, http.StatusOK)
 			}
 		})
+	}
+}
+
+func TestHomeAndLearnFourRsContainRequiredEducationalContent(t *testing.T) {
+	app := newTestApp(t)
+	home := httptest.NewRecorder()
+	app.handler.ServeHTTP(home, httptest.NewRequest(http.MethodGet, "/", nil))
+	for _, expected := range []string{"Ler 20 páginas de um livro", "Comece em poucos passos", "Criar meu primeiro hábito"} {
+		if !strings.Contains(home.Body.String(), expected) {
+			t.Errorf("Início não contém %q", expected)
+		}
+	}
+	learn := httptest.NewRecorder()
+	app.handler.ServeHTTP(learn, httptest.NewRequest(http.MethodGet, "/aprenda-4rs", nil))
+	for _, expected := range []string{"Relembrar", "Rotina", "Recompensa", "Repetição", "Reduza barreiras", "Repita com consistência"} {
+		if !strings.Contains(learn.Body.String(), expected) {
+			t.Errorf("Aprenda os 4 Rs não contém %q", expected)
+		}
+	}
+	if strings.Contains(learn.Body.String(), "próxima etapa") {
+		t.Fatal("Aprenda os 4 Rs ainda contém placeholder")
+	}
+}
+
+func TestHabitsPageUsesOneWeeklyExecutionsQueryAndRendersRealRates(t *testing.T) {
+	app := newTestApp(t)
+	today := todayIn("UTC")
+	app.habits.values["habit-a"] = habit.Habit{ID: "habit-a", OwnerUID: "firebase-user-a", Title: "Ler", Description: "Livros", Status: habit.StatusArchived, Schedule: habit.Schedule{Weekdays: []int{1}, Time: "19:00", WeeklyTargetExecutions: 1, Reminder: habit.ReminderNotification}}
+	app.progress.executions = []execution.Execution{{HabitID: "habit-a", ScheduledDate: today, Status: execution.StatusCompleted}, {HabitID: "habit-a", ScheduledDate: today, Status: execution.StatusNotDone}}
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/meus-habitos", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusOK || app.progress.executionQueries != 1 {
+		t.Fatalf("status=%d consultas=%d corpo=%s", recorder.Code, app.progress.executionQueries, recorder.Body.String())
+	}
+	if !strings.Contains(recorder.Body.String(), "Progresso nesta semana") || !strings.Contains(recorder.Body.String(), "50%") {
+		t.Fatalf("progresso semanal real ausente: %s", recorder.Body.String())
+	}
+}
+
+func TestHabitsWeeklySummaryIsIndependentFromVisualFilter(t *testing.T) {
+	newState := func(t *testing.T) testApp {
+		t.Helper()
+		app := newTestApp(t)
+		today := todayIn("UTC")
+		app.habits.values["archived"] = habit.Habit{ID: "archived", OwnerUID: "firebase-user-a", Title: "Arquivado", Status: habit.StatusArchived, Schedule: habit.Schedule{Weekdays: []int{1}, Time: "08:00", WeeklyTargetExecutions: 1, Reminder: habit.ReminderNotification}}
+		app.executions.values["expired"] = execution.Execution{ID: "expired", OwnerUID: "firebase-user-a", HabitID: "archived", ScheduledDate: today, Status: execution.StatusPending, RegistrationDeadline: time.Now().Add(-time.Hour)}
+		app.progress.source = app.executions
+		return app
+	}
+	render := func(t *testing.T, app testApp, filter string) string {
+		t.Helper()
+		recorder := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, "/meus-habitos?filtro="+filter, nil)
+		request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+		app.handler.ServeHTTP(recorder, request)
+		if recorder.Code != http.StatusOK || app.progress.executionQueries != 1 {
+			t.Fatalf("filtro=%s status=%d consultas=%d corpo=%s", filter, recorder.Code, app.progress.executionQueries, recorder.Body.String())
+		}
+		if app.executions.values["expired"].Status != execution.StatusNotDone {
+			t.Fatalf("filtro=%s não sincronizou hábito fora do resultado visual", filter)
+		}
+		return recorder.Body.String()
+	}
+	allBody := render(t, newState(t), "all")
+	todayBody := render(t, newState(t), "today")
+	for filter, body := range map[string]string{"all": allBody, "today": todayBody} {
+		if !strings.Contains(body, ">0%</strong>") || strings.Contains(body, "Sem execuções resolvidas nesta semana") {
+			t.Fatalf("filtro=%s não exibiu a mesma taxa semanal resolvida: %s", filter, body)
+		}
 	}
 }
 

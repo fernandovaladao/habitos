@@ -1,0 +1,20 @@
+{{define "learn-four-rs"}}
+<!doctype html>
+<html lang="pt-BR">
+{{template "head" .}}
+<body>
+  <header class="site-header">{{template "brand" .}}</header>
+  <main class="page-shell learn-shell">
+    <div class="page-heading"><div><p class="eyebrow">Aprenda os 4 Rs</p><h1>Entenda como os hábitos se formam</h1><p>Os 4 Rs ajudam a compreender o ciclo de formação e manutenção de hábitos.</p></div></div>
+    <section class="learn-list" aria-label="Os quatro Rs da formação de hábitos">
+      <article class="card learn-card"><span aria-hidden="true">1</span><div><h2>Relembrar</h2><p>É o estímulo ou sinal que indica o momento de iniciar o hábito.</p><p class="field-help"><strong>No HÁBITOS:</strong> lembretes por Notificação e/ou E-mail.</p></div></article>
+      <article class="card learn-card learn-card--orange"><span aria-hidden="true">2</span><div><h2>Rotina</h2><p>É a ação física, mental ou emocional realizada em resposta ao estímulo.</p><p class="field-help"><strong>No HÁBITOS:</strong> execute e registre o resultado do hábito.</p></div></article>
+      <article class="card learn-card"><span aria-hidden="true">3</span><div><h2>Recompensa</h2><p>É o resultado positivo que reforça a continuidade do ciclo.</p><p class="field-help"><strong>No HÁBITOS:</strong> acompanhe pontos, conquistas e progresso.</p></div></article>
+      <article class="card learn-card learn-card--orange"><span aria-hidden="true">4</span><div><h2>Repetição</h2><p>É a continuidade do ciclo Relembrar + Rotina + Recompensa, contribuindo para tornar o comportamento mais automático.</p><p class="field-help"><strong>No HÁBITOS:</strong> acompanhe a agenda, a sequência e o histórico.</p></div></article>
+    </section>
+    <section class="learn-start" aria-labelledby="learn-start-title"><h2 id="learn-start-title">Como começar</h2><ol class="guidance-list"><li>Observe sua rotina e identifique uma mudança possível.</li><li>Escolha uma mudança simples e realista.</li><li>Reduza barreiras para tornar o primeiro passo mais fácil.</li><li>Repita com consistência; pequenas ações importam.</li></ol><a class="button button--primary" href="/criar-habito">Criar meu hábito</a></section>
+  </main>
+  {{template "navigation" .}}
+</body>
+</html>
+{{end}}

@@ -5,6 +5,7 @@ import (
 	"math/big"
 	"time"
 
+	"habitos/internal/execution"
 	"habitos/internal/gamification"
 	"habitos/internal/habit"
 )
@@ -73,6 +74,15 @@ type Report struct {
 	Achievements     []gamification.UserAchievement
 	Evolution        []EvolutionPoint
 	ByHabit          []HabitProgress
+}
+
+// WeeklySummary is a read-only view calculated from the executions of one
+// civil week. It is not persisted.
+type WeeklySummary struct {
+	Period       Period
+	Rate         Rate
+	ByHabit      map[string]Rate
+	TodayByHabit map[string]execution.Execution
 }
 
 type Query struct {

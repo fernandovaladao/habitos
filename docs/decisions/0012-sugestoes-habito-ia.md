@@ -19,10 +19,15 @@ A saída estruturada contém título, descrição, meta, unidade, frequência e 
 
 A funcionalidade aparece somente na criação. `Usar sugestão` apenas preenche os campos, que continuam editáveis; nunca salva o hábito. `Ignorar` preserva o formulário. O fluxo normal de criação continua sendo a validação final e a única operação persistente.
 
+Como defesa adicional, título e descrição de entrada e de saída passam por uma verificação determinística estreita, voltada somente a instruções explicitamente perigosas, como autolesão, privação extrema, indução de vômito, alteração explícita de medicação ou esforço até desmaiar. A verificação é deliberadamente de melhor esforço: não é uma classificação médica geral, não usa uma lista ampla de termos de saúde e não oferece garantia de segurança semântica. Conteúdo recusado produz apenas erro genérico e não é registrado.
+
+A interface informa permanentemente que sugestões de IA podem conter erros e não substituem orientação de profissionais de saúde. O prompt, a verificação estreita, a validação estrutural, a revisão humana e a validação final do hábito formam camadas complementares; nenhuma delas autoriza salvamento automático.
+
 ## Consequências
 
 - Testes usam fakes e servidor HTTP local; nenhuma suíte automatizada chama a OpenAI API real.
 - A aplicação depende de configuração OpenAI válida para inicializar a funcionalidade.
 - Structured Outputs reduz respostas fora do formato, mas a validação determinística do backend continua obrigatória.
+- A defesa semântica reduz casos perigosos explícitos, mas não elimina falsos negativos e não deve ser apresentada como garantia.
 - Nenhuma coleção, índice ou transação Firestore é adicionada nesta fase.
 - A interface deve comunicar que a sugestão precisa ser revisada antes de salvar e não substitui orientação profissional.

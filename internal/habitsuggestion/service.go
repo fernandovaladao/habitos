@@ -29,6 +29,9 @@ func (s *Service) Suggest(ctx context.Context, identity auth.Identity, request R
 	if err := ValidateRequest(request); err != nil {
 		return Suggestion{}, err
 	}
+	if explicitlyDangerous(request.Title, request.Description) {
+		return Suggestion{}, ErrProvider
+	}
 	requestCtx, cancel := context.WithTimeout(ctx, s.timeout)
 	defer cancel()
 	raw, err := s.provider.Suggest(requestCtx, ProviderRequest{Title: request.Title, Description: request.Description})
@@ -36,6 +39,9 @@ func (s *Service) Suggest(ctx context.Context, identity auth.Identity, request R
 		if errors.Is(err, context.DeadlineExceeded) || errors.Is(requestCtx.Err(), context.DeadlineExceeded) {
 			return Suggestion{}, ErrProvider
 		}
+		return Suggestion{}, ErrProvider
+	}
+	if explicitlyDangerous(raw.Title, raw.Description) {
 		return Suggestion{}, ErrProvider
 	}
 	return ValidateProviderSuggestion(raw)

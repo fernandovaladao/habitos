@@ -47,3 +47,19 @@ func TestServiceRequiresAuthenticatedUIDAndQueriesEffectiveDates(t *testing.T) {
 		t.Fatalf("consulta = %v", repository.queries)
 	}
 }
+
+func TestWeekSummaryUsesExactlyOneExecutionsQuery(t *testing.T) {
+	repository := &stubRepository{executions: []execution.Execution{{HabitID: "a", ScheduledDate: "2026-08-20", Status: execution.StatusCompleted}, {HabitID: "b", ScheduledDate: "2026-08-21", Status: execution.StatusNotDone}}}
+	service := NewService(repository)
+	service.now = func() time.Time { return time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC) }
+	summary, err := service.WeekSummary(context.Background(), auth.Identity{UID: "owner"}, "UTC")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(repository.queries) != 1 || repository.queries[0] != [3]string{"owner", "2026-08-17", "2026-08-22"} {
+		t.Fatalf("consultas = %v", repository.queries)
+	}
+	if len(summary.ByHabit) != 2 || summary.Rate.Denominator != 2 {
+		t.Fatalf("resumo = %+v", summary)
+	}
+}

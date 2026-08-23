@@ -58,6 +58,23 @@ func (s *Service) Report(ctx context.Context, identity auth.Identity, timezone s
 	return Calculate(period, executions, bonuses, streaks, achievements, habits)
 }
 
+// WeekSummary performs one executions query for the user's current civil week
+// and groups the exact rates in memory.
+func (s *Service) WeekSummary(ctx context.Context, identity auth.Identity, timezone string) (WeeklySummary, error) {
+	if identity.UID == "" {
+		return WeeklySummary{}, auth.ErrInvalidSession
+	}
+	period, err := ResolvePeriod(Query{Kind: PeriodWeek}, s.now(), timezone)
+	if err != nil {
+		return WeeklySummary{}, err
+	}
+	executions, err := s.repository.Executions(ctx, identity.UID, period.StartDate, period.EffectiveEnd)
+	if err != nil {
+		return WeeklySummary{}, err
+	}
+	return CalculateWeeklySummary(period, executions)
+}
+
 func uniqueHabitIDs(executions []execution.Execution, streaks []gamification.Streak) []string {
 	seen := make(map[string]bool)
 	var result []string

@@ -2,6 +2,8 @@
 
 MVP de uma PWA para adolescentes, focada na formação e manutenção de hábitos positivos usando os **4 Rs da formação de hábitos**: **Relembrar, Rotina, Recompensa e Repetição**.
 
+> **Pendência documental — RF-032:** o service worker atual mantém em cache os assets estáticos da interface, mas ainda não mantém documentos HTML e conteúdo navegável da aplicação para abertura offline. A ERS continua exigindo cache da interface e do conteúdo estático; criação, edição e registro offline permanecem fora do MVP. A estratégia para fechar essa divergência será decidida separadamente e não integra a Fase 11.
+
 ## Objetivo
 Permitir criar hábitos, definir metas e lembretes, registrar execuções, acompanhar progresso, receber pontos/conquistas e visualizar um ranking geral com privacidade.
 

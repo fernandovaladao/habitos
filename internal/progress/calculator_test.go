@@ -35,6 +35,32 @@ func TestCalculateUsesExactProportionalRateAndExcludesPending(t *testing.T) {
 	}
 }
 
+func TestCalculateWeeklySummaryGroupsOneExecutionSetByHabit(t *testing.T) {
+	period := Period{Kind: PeriodWeek, StartDate: "2026-08-17", EndDate: "2026-08-23", EffectiveEnd: "2026-08-22"}
+	summary, err := CalculateWeeklySummary(period, []execution.Execution{
+		{HabitID: "a", ScheduledDate: "2026-08-17", Status: execution.StatusCompleted},
+		{HabitID: "a", ScheduledDate: "2026-08-18", Status: execution.StatusPartial, TargetHundredthsSnapshot: 400, AchievedHundredths: 100},
+		{HabitID: "b", ScheduledDate: "2026-08-19", Status: execution.StatusNotDone},
+		{HabitID: "b", ScheduledDate: "2026-08-22", Status: execution.StatusPending},
+		{HabitID: "outside", ScheduledDate: "2026-08-16", Status: execution.StatusCompleted},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Rate.Denominator != 3 || summary.Rate.Contribution.Cmp(big.NewRat(5, 4)) != 0 {
+		t.Fatalf("taxa geral = %s/%d", summary.Rate.Contribution, summary.Rate.Denominator)
+	}
+	if rate := summary.ByHabit["a"]; rate.Denominator != 2 || rate.Contribution.Cmp(big.NewRat(5, 4)) != 0 {
+		t.Fatalf("taxa do hábito a = %s/%d", rate.Contribution, rate.Denominator)
+	}
+	if rate := summary.ByHabit["b"]; rate.Denominator != 1 || rate.Contribution.Sign() != 0 {
+		t.Fatalf("taxa do hábito b = %s/%d", rate.Contribution, rate.Denominator)
+	}
+	if summary.TodayByHabit["b"].Status != execution.StatusPending {
+		t.Fatalf("execução de hoje = %+v", summary.TodayByHabit)
+	}
+}
+
 func TestCalculateMasksDeletedHabitAndUsesOnlyActiveStreak(t *testing.T) {
 	period := Period{Kind: PeriodMonth, StartDate: "2026-08-01", EndDate: "2026-08-31", EffectiveEnd: "2026-08-22"}
 	report, err := Calculate(period,

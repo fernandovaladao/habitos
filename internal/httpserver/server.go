@@ -93,6 +93,9 @@ type pageData struct {
 	Executions        []execution.Execution
 	Notes             []note.Note
 	TodayExecutions   map[string]*execution.Execution
+	WeeklyProgress    progress.WeeklySummary
+	TodayProgress     progress.Rate
+	HasTodayProgress  bool
 	NextHistoryBefore string
 	Streak            gamification.Streak
 	Streaks           []gamification.Streak
@@ -244,15 +247,17 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("GET /habitos/{id}/editar", h.activeAuth.RequirePage(http.HandlerFunc(h.editHabitPage)))
 	mux.Handle("GET /progresso", h.activeAuth.RequirePage(http.HandlerFunc(h.progressPage)))
 	mux.Handle("GET /recompensas", h.activeAuth.RequirePage(http.HandlerFunc(h.rewardsPage)))
-	mux.HandleFunc("GET /aprenda-4rs", h.publicPlaceholder(pageData{
-		Title: "Aprenda os 4 Rs", Description: "O conteúdo completo sobre os 4 Rs será disponibilizado em uma próxima etapa.", Path: "/aprenda-4rs",
-	}))
+	mux.HandleFunc("GET /aprenda-4rs", h.learnFourRsPage)
 
 	return securityHeaders(requestLogger(config.Logger, mux), config.FirebaseWeb.AuthEmulatorURL != ""), nil
 }
 
 func (h *handler) home(w http.ResponseWriter, _ *http.Request) {
 	h.render(w, http.StatusOK, "home", pageData{Title: "Início", Description: "Crie hábitos melhores, um passo de cada vez.", Path: "/"})
+}
+
+func (h *handler) learnFourRsPage(w http.ResponseWriter, _ *http.Request) {
+	h.render(w, http.StatusOK, "learn-four-rs", pageData{Title: "Aprenda os 4 Rs", Description: "Entenda o ciclo de formação e manutenção de hábitos.", Path: "/aprenda-4rs"})
 }
 
 func (h *handler) loginPage(w http.ResponseWriter, _ *http.Request) {
@@ -340,45 +345,44 @@ func (h *handler) habitsPage(w http.ResponseWriter, r *http.Request) {
 	if filter != habit.FilterAll && filter != habit.FilterToday && filter != habit.FilterCompleted {
 		filter = habit.FilterAll
 	}
-	listFilter := filter
-	if filter == habit.FilterCompleted {
-		listFilter = habit.FilterAll
-	}
-	values, err := h.habits.List(r.Context(), identity, userProfile.Timezone, listFilter)
+	// The weekly summary must not depend on the visual filter. Synchronize every
+	// non-deleted habit first, then derive Today/Completed from the resulting
+	// authoritative executions returned by the single weekly query.
+	values, err := h.habits.List(r.Context(), identity, userProfile.Timezone, habit.FilterAll)
 	if err != nil {
 		h.renderHabitError(w, err)
 		return
 	}
-	todayExecutions := map[string]*execution.Execution{}
 	for _, value := range values {
 		if err := h.syncHabit(r, identity, userProfile, value); err != nil {
 			h.renderHabitError(w, err)
 			return
 		}
-		history, err := h.executions.History(r.Context(), identity, value.ID, "")
-		if err != nil {
-			h.renderHabitError(w, err)
-			return
-		}
-		today := todayIn(userProfile.Timezone)
-		for _, item := range history {
-			if item.ScheduledDate == today {
-				copy := item
-				todayExecutions[value.ID] = &copy
-				break
-			}
-		}
 	}
-	if filter == habit.FilterCompleted {
+	weeklyProgress, err := h.progress.WeekSummary(r.Context(), identity, userProfile.Timezone)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	todayExecutions := make(map[string]*execution.Execution, len(weeklyProgress.TodayByHabit))
+	for habitID, item := range weeklyProgress.TodayByHabit {
+		copy := item
+		todayExecutions[habitID] = &copy
+	}
+	if filter == habit.FilterToday || filter == habit.FilterCompleted {
 		filtered := values[:0]
 		for _, value := range values {
-			if item, ok := todayExecutions[value.ID]; ok && item.Status == execution.StatusCompleted {
+			item, ok := todayExecutions[value.ID]
+			if !ok || value.Status != habit.StatusActive {
+				continue
+			}
+			if filter == habit.FilterToday || item.Status == execution.StatusCompleted {
 				filtered = append(filtered, value)
 			}
 		}
 		values = filtered
 	}
-	h.render(w, http.StatusOK, "habits", pageData{Title: "Meus Hábitos", Description: "Gerencie seus hábitos.", Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habits: values, Filter: filter, TodayExecutions: todayExecutions})
+	h.render(w, http.StatusOK, "habits", pageData{Title: "Meus Hábitos", Description: "Gerencie seus hábitos.", Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habits: values, Filter: filter, TodayExecutions: todayExecutions, WeeklyProgress: weeklyProgress})
 }
 
 func (h *handler) habitDetailsPage(w http.ResponseWriter, r *http.Request) {
@@ -432,7 +436,25 @@ func (h *handler) habitDetailsPage(w http.ResponseWriter, r *http.Request) {
 		h.renderHabitError(w, err)
 		return
 	}
-	h.render(w, http.StatusOK, "habit-details", pageData{Title: "Detalhes do Hábito", Description: value.Title, Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value, SchedulePending: value.PreviousSchedule != nil && today < value.ScheduleEffectiveDate, Execution: current, Executions: history, Notes: notes, NextHistoryBefore: nextBefore, Streak: streak})
+	weeklyProgress, err := h.progress.WeekSummary(r.Context(), identity, userProfile.Timezone)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	todayProgress := progress.EmptyRate()
+	hasTodayProgress := false
+	if current != nil {
+		contribution, resolved, progressErr := progress.ExecutionContribution(*current)
+		if progressErr != nil {
+			h.renderHabitError(w, progressErr)
+			return
+		}
+		if resolved {
+			todayProgress = progress.Rate{Contribution: contribution, Denominator: 1}
+			hasTodayProgress = true
+		}
+	}
+	h.render(w, http.StatusOK, "habit-details", pageData{Title: "Detalhes do Hábito", Description: value.Title, Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value, SchedulePending: value.PreviousSchedule != nil && today < value.ScheduleEffectiveDate, Execution: current, Executions: history, Notes: notes, NextHistoryBefore: nextBefore, Streak: streak, WeeklyProgress: weeklyProgress, TodayProgress: todayProgress, HasTodayProgress: hasTodayProgress})
 }
 
 func (h *handler) progressData(r *http.Request) (pageData, error) {
@@ -542,12 +564,6 @@ func (h *handler) renderHabitError(w http.ResponseWriter, err error) {
 		description = "Hábito não encontrado."
 	}
 	h.render(w, statusCode, "error", pageData{Title: "Erro", Description: description, Authenticated: true})
-}
-
-func (h *handler) publicPlaceholder(page pageData) http.HandlerFunc {
-	return func(w http.ResponseWriter, _ *http.Request) {
-		h.render(w, http.StatusOK, "placeholder", page)
-	}
 }
 
 func (h *handler) health(w http.ResponseWriter, _ *http.Request) {

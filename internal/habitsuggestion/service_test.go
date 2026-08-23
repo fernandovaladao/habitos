@@ -69,3 +69,15 @@ func TestServiceEnforcesRequestTimeout(t *testing.T) {
 		t.Fatalf("timeout não foi aplicado: %s", elapsed)
 	}
 }
+
+func TestServiceRejectsExplicitDangerBeforeAndAfterProvider(t *testing.T) {
+	provider := &fakeProvider{result: ProviderSuggestion{Title: "Ler", Description: "Leia um pouco.", GoalType: "simple", Weekdays: []int{1}, WeeklyTargetExecutions: 1}}
+	service := NewService(provider, time.Second)
+	if _, err := service.Suggest(context.Background(), auth.Identity{UID: "u1"}, Request{Title: "Meta", Description: "Ficar sem dormir"}); !errors.Is(err, ErrProvider) || provider.calls != 0 {
+		t.Fatalf("entrada perigosa: erro=%v chamadas=%d", err, provider.calls)
+	}
+	provider.result.Description = "Treinar até desmaiar"
+	if _, err := service.Suggest(context.Background(), auth.Identity{UID: "u1"}, Request{Title: "Treino", Description: "Criar rotina"}); !errors.Is(err, ErrProvider) || provider.calls != 1 {
+		t.Fatalf("saída perigosa: erro=%v chamadas=%d", err, provider.calls)
+	}
+}

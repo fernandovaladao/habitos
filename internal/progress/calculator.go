@@ -89,6 +89,36 @@ func Calculate(period Period, executions []execution.Execution, bonuses []gamifi
 	return report, nil
 }
 
+func CalculateWeeklySummary(period Period, executions []execution.Execution) (WeeklySummary, error) {
+	summary := WeeklySummary{Period: period, Rate: EmptyRate(), ByHabit: make(map[string]Rate), TodayByHabit: make(map[string]execution.Execution)}
+	for _, item := range executions {
+		if item.ScheduledDate < period.StartDate || item.ScheduledDate > period.EffectiveEnd {
+			continue
+		}
+		if item.ScheduledDate == period.EffectiveEnd {
+			summary.TodayByHabit[item.HabitID] = item
+		}
+		contribution, resolved, err := ExecutionContribution(item)
+		if err != nil {
+			return WeeklySummary{}, err
+		}
+		if !resolved {
+			continue
+		}
+		addRate(&summary.Rate, contribution)
+		habitRate := summary.ByHabit[item.HabitID]
+		addRate(&habitRate, contribution)
+		summary.ByHabit[item.HabitID] = habitRate
+	}
+	return summary, nil
+}
+
+// ExecutionContribution returns the exact proportional contribution of one
+// resolved execution. Pending executions have resolved=false.
+func ExecutionContribution(value execution.Execution) (*big.Rat, bool, error) {
+	return executionContribution(value)
+}
+
 func executionContribution(value execution.Execution) (*big.Rat, bool, error) {
 	switch value.Status {
 	case execution.StatusPending:
@@ -111,11 +141,7 @@ func executionContribution(value execution.Execution) (*big.Rat, bool, error) {
 }
 
 func addExecution(rate *Rate, counts *Counts, status execution.Status, contribution *big.Rat) {
-	if rate.Contribution == nil {
-		rate.Contribution = new(big.Rat)
-	}
-	rate.Contribution.Add(rate.Contribution, contribution)
-	rate.Denominator++
+	addRate(rate, contribution)
 	switch status {
 	case execution.StatusCompleted:
 		counts.Completed++
@@ -124,6 +150,14 @@ func addExecution(rate *Rate, counts *Counts, status execution.Status, contribut
 	case execution.StatusNotDone:
 		counts.NotDone++
 	}
+}
+
+func addRate(rate *Rate, contribution *big.Rat) {
+	if rate.Contribution == nil {
+		rate.Contribution = new(big.Rat)
+	}
+	rate.Contribution.Add(rate.Contribution, contribution)
+	rate.Denominator++
 }
 
 func CompareRate(left, right Rate) int {
