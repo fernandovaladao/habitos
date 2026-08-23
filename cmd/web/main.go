@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"habitos/internal/auth"
+	"habitos/internal/avatar"
 	"habitos/internal/config"
 	"habitos/internal/execution"
 	"habitos/internal/firebaseadmin"
@@ -31,7 +32,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	clients, err := firebaseadmin.New(context.Background(), appConfig.FirebaseProjectID)
+	clients, err := firebaseadmin.New(context.Background(), appConfig.FirebaseProjectID, appConfig.FirebaseStorageBucket)
 	if err != nil {
 		logger.Error("falha ao inicializar serviços Firebase", "error", err)
 		os.Exit(1)
@@ -50,6 +51,7 @@ func main() {
 	progressService := progress.NewService(progress.NewFirestoreRepository(clients.Firestore))
 	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
 	suggestionService := habitsuggestion.NewService(habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel}), appConfig.AIRequestTimeout)
+	avatarService := avatar.NewService(avatar.NewFirestoreRepository(clients.Firestore), avatar.NewStorage(clients.Storage))
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
 		Logger:        logger,
@@ -70,6 +72,7 @@ func main() {
 		Progress:    progressService,
 		Ranking:     rankingService,
 		Suggestions: suggestionService,
+		Avatars:     avatarService,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)

@@ -6,9 +6,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"io"
 	"log/slog"
 	"math/big"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -16,6 +19,7 @@ import (
 	"time"
 
 	"habitos/internal/auth"
+	"habitos/internal/avatar"
 	"habitos/internal/csrf"
 	"habitos/internal/execution"
 	"habitos/internal/gamification"
@@ -117,6 +121,73 @@ type testApp struct {
 	notes       *fakeNoteRepository
 	ranking     *fakeRankingRepository
 	suggestions *fakeSuggestionProvider
+	avatarRepo  *fakeAvatarRepository
+	avatarStore *fakeAvatarStore
+}
+
+type fakeAvatarRepository struct {
+	profiles *fakeProfileRepository
+	media    map[string]avatar.Media
+}
+
+func (r *fakeAvatarRepository) ReplacePhoto(_ context.Context, uid string, media avatar.Media, now time.Time) (string, error) {
+	value, ok := r.profiles.profiles[uid]
+	if !ok {
+		return "", profile.ErrNotFound
+	}
+	old := value.PhotoObjectPath
+	value.PhotoMediaID, value.PhotoObjectPath, value.PhotoUpdatedAt = media.ID, media.ObjectPath, &now
+	r.profiles.profiles[uid] = value
+	r.media[media.ID] = media
+	return old, nil
+}
+func (r *fakeAvatarRepository) RemovePhoto(_ context.Context, uid, internalType string, now time.Time) (string, error) {
+	value, ok := r.profiles.profiles[uid]
+	if !ok {
+		return "", profile.ErrNotFound
+	}
+	old := value.PhotoObjectPath
+	delete(r.media, value.PhotoMediaID)
+	value.PhotoMediaID, value.PhotoObjectPath, value.PhotoUpdatedAt = "", "", nil
+	if internalType != "" {
+		value.AvatarType = internalType
+	}
+	value.UpdatedAt = now
+	r.profiles.profiles[uid] = value
+	return old, nil
+}
+func (r *fakeAvatarRepository) Media(_ context.Context, id string) (avatar.Media, error) {
+	value, ok := r.media[id]
+	if !ok {
+		return avatar.Media{}, avatar.ErrNotFound
+	}
+	return value, nil
+}
+func (r *fakeAvatarRepository) CurrentMedia(_ context.Context, uid string) (avatar.Media, error) {
+	profileValue, ok := r.profiles.profiles[uid]
+	if !ok || profileValue.PhotoMediaID == "" {
+		return avatar.Media{}, avatar.ErrNotFound
+	}
+	return r.Media(context.Background(), profileValue.PhotoMediaID)
+}
+func (*fakeAvatarRepository) CleanupCompleted(context.Context, string) error { return nil }
+
+type fakeAvatarStore struct{ values map[string][]byte }
+
+func (s *fakeAvatarStore) Write(_ context.Context, path string, value []byte) error {
+	s.values[path] = append([]byte(nil), value...)
+	return nil
+}
+func (s *fakeAvatarStore) Read(_ context.Context, path string) ([]byte, error) {
+	value, ok := s.values[path]
+	if !ok {
+		return nil, avatar.ErrNotFound
+	}
+	return append([]byte(nil), value...), nil
+}
+func (s *fakeAvatarStore) Delete(_ context.Context, path string) error {
+	delete(s.values, path)
+	return nil
 }
 
 type fakeHabitRepository struct {
@@ -370,15 +441,17 @@ func newTestApp(t *testing.T) testApp {
 	noteRepo := newFakeNoteRepository()
 	rankingRepo := &fakeRankingRepository{}
 	suggestionProvider := &fakeSuggestionProvider{result: habitsuggestion.ProviderSuggestion{Title: "Ler um pouco", Description: "Comece com uma meta realista.", GoalType: "quantitative", Target: "10", Unit: "pages", Weekdays: []int{1, 3, 5}, WeeklyTargetExecutions: 3}}
+	avatarRepo := &fakeAvatarRepository{profiles: profiles, media: map[string]avatar.Media{}}
+	avatarStore := &fakeAvatarStore{values: map[string][]byte{}}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second)})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore)})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -779,7 +852,12 @@ func TestEnsureAndUpdateProfileUseAuthenticatedUID(t *testing.T) {
 	}
 
 	updateRecorder := httptest.NewRecorder()
-	updateRequest := httptest.NewRequest(http.MethodPut, "/api/profile?userId=firebase-user-b", bytes.NewBufferString(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":true,"avatarType":"orange","reminderNotificationEnabled":true,"reminderEmailEnabled":false}`))
+	current := app.profiles.profiles["firebase-user-a"]
+	current.AvatarType = profile.AvatarOrange
+	current.PhotoMediaID = "foto-existente"
+	current.PhotoObjectPath = "avatars/firebase-user-a/foto-existente.jpg"
+	app.profiles.profiles["firebase-user-a"] = current
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/profile?userId=firebase-user-b", bytes.NewBufferString(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":true,"reminderNotificationEnabled":true,"reminderEmailEnabled":false}`))
 	updateRequest.Header.Set(csrf.HeaderName, token)
 	updateRequest.AddCookie(csrfCookie)
 	updateRequest.AddCookie(sessionCookie)
@@ -791,8 +869,110 @@ func TestEnsureAndUpdateProfileUseAuthenticatedUID(t *testing.T) {
 		t.Fatalf("UID atualizado = %q", app.profiles.lastUID)
 	}
 	updated := app.profiles.profiles["firebase-user-a"]
-	if updated.AvatarType != profile.AvatarOrange || !updated.ReminderNotificationEnabled || updated.ReminderEmailEnabled {
+	if updated.AvatarType != profile.AvatarOrange || updated.PhotoMediaID != "foto-existente" || updated.PhotoObjectPath != "avatars/firebase-user-a/foto-existente.jpg" || !updated.ReminderNotificationEnabled || updated.ReminderEmailEnabled {
 		t.Fatalf("perfil atualizado = %#v", updated)
+	}
+}
+
+func TestPrivatePhotoUploadReadAndOwnerIsolation(t *testing.T) {
+	app := newTestApp(t)
+	identity := app.sessions.identity
+	if _, err := profile.NewService(app.profiles).EnsureProfile(context.Background(), identity, "UTC"); err != nil {
+		t.Fatal(err)
+	}
+	token, csrfCookie := issueCSRF(t, app.handler)
+	var body bytes.Buffer
+	writer := multipart.NewWriter(&body)
+	part, err := writer.CreateFormFile("photo", "avatar.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := png.Encode(part, image.NewRGBA(image.Rect(0, 0, 40, 30))); err != nil {
+		t.Fatal(err)
+	}
+	if err := writer.Close(); err != nil {
+		t.Fatal(err)
+	}
+	upload := httptest.NewRequest(http.MethodPost, "/api/profile/photo", &body)
+	upload.Header.Set("Content-Type", writer.FormDataContentType())
+	upload.Header.Set(csrf.HeaderName, token)
+	upload.AddCookie(csrfCookie)
+	upload.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	uploadRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(uploadRecorder, upload)
+	if uploadRecorder.Code != http.StatusOK {
+		t.Fatalf("upload status=%d corpo=%s", uploadRecorder.Code, uploadRecorder.Body.String())
+	}
+	mediaID := app.profiles.profiles[identity.UID].PhotoMediaID
+	if mediaID == "" {
+		t.Fatal("upload não vinculou mídia ao perfil")
+	}
+	if strings.Contains(uploadRecorder.Body.String(), mediaID) || strings.Contains(uploadRecorder.Body.String(), "photoMediaId") || strings.Contains(uploadRecorder.Body.String(), "photoObjectPath") || strings.Contains(uploadRecorder.Body.String(), "photoUpdatedAt") {
+		t.Fatalf("resposta de upload expôs metadados privados: %s", uploadRecorder.Body.String())
+	}
+	profilePage := httptest.NewRequest(http.MethodGet, "/perfil", nil)
+	profilePage.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	profileRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(profileRecorder, profilePage)
+	pageBody := profileRecorder.Body.String()
+	if profileRecorder.Code != http.StatusOK || !strings.Contains(pageBody, `/media/avatars/current`) || strings.Contains(pageBody, mediaID) || strings.Contains(pageBody, app.profiles.profiles[identity.UID].PhotoObjectPath) || strings.Contains(pageBody, "photoUpdatedAt") {
+		t.Fatalf("HTML expôs metadados privados: status=%d corpo=%s", profileRecorder.Code, pageBody)
+	}
+
+	read := httptest.NewRequest(http.MethodGet, "/media/avatars/"+mediaID, nil)
+	read.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	readRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(readRecorder, read)
+	if readRecorder.Code != http.StatusOK || readRecorder.Header().Get("Cache-Control") != "private, max-age=0, must-revalidate" || readRecorder.Header().Get("Content-Type") != "image/jpeg" {
+		t.Fatalf("leitura status=%d headers=%#v", readRecorder.Code, readRecorder.Header())
+	}
+	conditional := httptest.NewRequest(http.MethodGet, "/media/avatars/current", nil)
+	conditional.Header.Set("If-None-Match", readRecorder.Header().Get("ETag"))
+	conditional.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	conditionalRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(conditionalRecorder, conditional)
+	if conditionalRecorder.Code != http.StatusNotModified {
+		t.Fatalf("proprietário com ETag recebeu status %d, esperado 304", conditionalRecorder.Code)
+	}
+
+	app.sessions.identity = auth.Identity{UID: "firebase-user-b", Email: "b@example.com"}
+	foreign := httptest.NewRequest(http.MethodGet, "/media/avatars/"+mediaID, nil)
+	foreign.Header.Set("If-None-Match", readRecorder.Header().Get("ETag"))
+	foreign.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	foreignRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(foreignRecorder, foreign)
+	if foreignRecorder.Code != http.StatusNotFound {
+		t.Fatalf("outro usuário com ETag recebeu status %d, esperado 404 antes de avaliar condição", foreignRecorder.Code)
+	}
+	anonymous := httptest.NewRequest(http.MethodGet, "/media/avatars/"+mediaID, nil)
+	anonymous.Header.Set("If-None-Match", readRecorder.Header().Get("ETag"))
+	anonymousRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(anonymousRecorder, anonymous)
+	if anonymousRecorder.Code != http.StatusUnauthorized {
+		t.Fatalf("anônimo com ETag recebeu status %d, esperado 401", anonymousRecorder.Code)
+	}
+}
+
+func TestSelectInternalAvatarRemovesPrivatePhoto(t *testing.T) {
+	app := newTestApp(t)
+	uid := app.sessions.identity.UID
+	app.profiles.profiles[uid] = profile.Profile{UID: uid, AvatarType: profile.AvatarBlue, PhotoMediaID: "foto", PhotoObjectPath: "avatars/" + uid + "/foto.jpg"}
+	app.avatarRepo.media["foto"] = avatar.Media{ID: "foto", OwnerUID: uid, ObjectPath: "avatars/" + uid + "/foto.jpg"}
+	app.avatarStore.values["avatars/"+uid+"/foto.jpg"] = []byte("foto")
+	token, csrfCookie := issueCSRF(t, app.handler)
+	request := httptest.NewRequest(http.MethodPut, "/api/profile/avatar/internal", strings.NewReader(`{"avatarType":"green"}`))
+	request.Header.Set("Content-Type", "application/json")
+	request.Header.Set(csrf.HeaderName, token)
+	request.AddCookie(csrfCookie)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, request)
+	updated := app.profiles.profiles[uid]
+	if recorder.Code != http.StatusOK || updated.AvatarType != profile.AvatarGreen || updated.PhotoMediaID != "" {
+		t.Fatalf("status=%d perfil=%#v corpo=%s", recorder.Code, updated, recorder.Body.String())
+	}
+	if _, exists := app.avatarStore.values["avatars/"+uid+"/foto.jpg"]; exists {
+		t.Fatal("objeto anterior não foi removido")
 	}
 }
 

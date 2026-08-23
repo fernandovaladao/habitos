@@ -6,7 +6,7 @@
   <header class="site-header">{{template "brand" .}}</header>
   <main class="page-shell profile-shell">
     <section class="card profile-summary">
-      <div class="profile-avatar profile-avatar--{{if .Profile.AvatarType}}{{.Profile.AvatarType}}{{else}}default{{end}}" aria-hidden="true">●</div>
+      <div class="profile-avatar profile-avatar--{{if .Profile.AvatarType}}{{.Profile.AvatarType}}{{else}}default{{end}}"{{if not .Profile.PhotoMediaID}} aria-hidden="true"{{end}}>{{if .Profile.PhotoMediaID}}<img src="/media/avatars/current" alt="Foto do perfil" data-profile-photo>{{else}}●{{end}}</div>
       <div>
         <p class="eyebrow">Perfil e configurações</p>
         <h1>{{if .Profile.Nickname}}{{.Profile.Nickname}}{{else}}Complete seu perfil{{end}}</h1>
@@ -15,18 +15,22 @@
     </section>
 
     {{if not .Profile.ProfileComplete}}<div class="notice">Informe um apelido e uma idade válidos para concluir seu perfil.</div>{{end}}
-    <form class="profile-sections" data-profile-form>
-      <section class="card profile-card">
+    <section class="card profile-card avatar-settings">
         <h2>Avatar</h2>
-        <p class="field-help">Escolha um avatar interno para representar você. Ele poderá aparecer no ranking quando sua participação estiver ativada.</p>
-        <fieldset class="avatar-picker"><legend class="sr-only">Escolha o avatar</legend>
+        <p class="field-help">Sua foto é privada e aparece somente aqui. O ranking continua usando o avatar interno escolhido.</p>
+        <form data-internal-avatar-form><fieldset class="avatar-picker"><legend class="sr-only">Escolha o avatar público</legend>
           <label><input type="radio" name="avatarType" value="default" {{if or (eq .Profile.AvatarType "") (eq .Profile.AvatarType "default")}}checked{{end}}><span class="profile-avatar profile-avatar--default" aria-hidden="true">●</span><span>Padrão</span></label>
           <label><input type="radio" name="avatarType" value="blue" {{if eq .Profile.AvatarType "blue"}}checked{{end}}><span class="profile-avatar profile-avatar--blue" aria-hidden="true">●</span><span>Azul</span></label>
           <label><input type="radio" name="avatarType" value="orange" {{if eq .Profile.AvatarType "orange"}}checked{{end}}><span class="profile-avatar profile-avatar--orange" aria-hidden="true">●</span><span>Laranja</span></label>
           <label><input type="radio" name="avatarType" value="green" {{if eq .Profile.AvatarType "green"}}checked{{end}}><span class="profile-avatar profile-avatar--green" aria-hidden="true">●</span><span>Verde</span></label>
           <label><input type="radio" name="avatarType" value="purple" {{if eq .Profile.AvatarType "purple"}}checked{{end}}><span class="profile-avatar profile-avatar--purple" aria-hidden="true">●</span><span>Roxo</span></label>
-        </fieldset>
-      </section>
+        </fieldset><button class="button button--secondary" type="submit">Usar avatar interno</button></form>
+        <form data-photo-form enctype="multipart/form-data"><label for="profile-photo">Enviar foto privada</label><input id="profile-photo" name="photo" type="file" accept="image/jpeg,image/png,image/webp" required><small>JPEG, PNG ou WebP, até 5 MiB.</small><button class="button button--secondary" type="submit">Enviar foto</button></form>
+        {{if .Profile.PhotoMediaID}}<button class="button danger" type="button" data-remove-photo>Remover foto</button>{{end}}
+        <p class="form-message" data-avatar-message role="status" aria-live="polite"></p>
+    </section>
+
+    <form class="profile-sections" data-profile-form>
 
       <section class="card profile-card">
         <h2>Perfil</h2>

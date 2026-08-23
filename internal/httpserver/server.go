@@ -2,6 +2,7 @@ package httpserver
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"habitos/internal/auth"
+	"habitos/internal/avatar"
 	"habitos/internal/csrf"
 	"habitos/internal/execution"
 	"habitos/internal/gamification"
@@ -51,6 +53,7 @@ type Dependencies struct {
 	Progress    *progress.Service
 	Ranking     *ranking.Service
 	Suggestions *habitsuggestion.Service
+	Avatars     *avatar.Service
 }
 
 type pageData struct {
@@ -92,6 +95,7 @@ type handler struct {
 	progress      *progress.Service
 	ranking       *ranking.Service
 	suggestions   *habitsuggestion.Service
+	avatars       *avatar.Service
 	auth          *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
@@ -125,8 +129,8 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil {
-		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking e sugestões são obrigatórias")
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil || dependencies.Avatars == nil {
+		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking, sugestões e avatares são obrigatórias")
 	}
 
 	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
@@ -150,6 +154,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		progress:      dependencies.Progress,
 		ranking:       dependencies.Ranking,
 		suggestions:   dependencies.Suggestions,
+		avatars:       dependencies.Avatars,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
@@ -167,6 +172,10 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("POST /api/auth/logout", h.csrf.Protect(http.HandlerFunc(h.logout)))
 	mux.Handle("POST /api/profile/ensure", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
 	mux.Handle("PUT /api/profile", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
+	mux.Handle("POST /api/profile/photo", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.uploadProfilePhoto))))
+	mux.Handle("DELETE /api/profile/photo", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.removeProfilePhoto))))
+	mux.Handle("PUT /api/profile/avatar/internal", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.selectInternalAvatar))))
+	mux.Handle("GET /media/avatars/{id}", h.auth.RequireAPI(http.HandlerFunc(h.profilePhoto)))
 	mux.Handle("POST /api/habits", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
 	mux.Handle("POST /api/habit-suggestions", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.suggestHabit))))
 	mux.Handle("PUT /api/habits/{id}", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
@@ -584,7 +593,6 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		Weight                      string `json:"weight"`
 		Height                      string `json:"height"`
 		Gender                      string `json:"gender"`
-		AvatarType                  string `json:"avatarType"`
 		ReminderNotificationEnabled bool   `json:"reminderNotificationEnabled"`
 		ReminderEmailEnabled        bool   `json:"reminderEmailEnabled"`
 	}
@@ -613,7 +621,7 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	userProfile, err := h.profiles.Update(r.Context(), identity, profile.Update{
 		Nickname: input.Nickname, Age: input.Age, Timezone: input.Timezone, RankingOptIn: input.RankingOptIn, WeightHundredths: weight, HeightHundredths: height, Gender: input.Gender,
-		AvatarType: input.AvatarType, ReminderNotificationEnabled: input.ReminderNotificationEnabled, ReminderEmailEnabled: input.ReminderEmailEnabled,
+		AvatarType: currentProfile.AvatarType, ReminderNotificationEnabled: input.ReminderNotificationEnabled, ReminderEmailEnabled: input.ReminderEmailEnabled,
 	})
 	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) || errors.Is(err, profile.ErrInvalidWeight) || errors.Is(err, profile.ErrInvalidHeight) || errors.Is(err, profile.ErrInvalidGender) || errors.Is(err, profile.ErrInvalidAvatar) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
@@ -625,6 +633,87 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, userProfile)
+}
+
+func (h *handler) uploadProfilePhoto(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	r.Body = http.MaxBytesReader(w, r.Body, avatar.MaxUploadBytes+1024*1024)
+	file, _, err := r.FormFile("photo")
+	if err != nil {
+		http.Error(w, "Selecione uma imagem válida.", http.StatusBadRequest)
+		return
+	}
+	defer file.Close()
+	if r.MultipartForm != nil {
+		defer r.MultipartForm.RemoveAll()
+	}
+	_, err = h.avatars.Upload(r.Context(), identity, file)
+	if errors.Is(err, avatar.ErrTooLarge) {
+		http.Error(w, "A imagem excede os limites permitidos.", http.StatusRequestEntityTooLarge)
+		return
+	}
+	if errors.Is(err, avatar.ErrInvalidImage) {
+		http.Error(w, "A imagem deve ser JPEG, PNG ou WebP válido.", http.StatusUnprocessableEntity)
+		return
+	}
+	if err != nil {
+		h.logger.Error("falha ao atualizar foto privada")
+		http.Error(w, "Não foi possível atualizar a foto.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "updated"})
+}
+
+func (h *handler) removeProfilePhoto(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	if err := h.avatars.RemovePhoto(r.Context(), identity); err != nil {
+		h.logger.Error("falha ao remover foto privada")
+		http.Error(w, "Não foi possível remover a foto.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "removed"})
+}
+
+func (h *handler) selectInternalAvatar(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	var input struct {
+		AvatarType string `json:"avatarType"`
+	}
+	if decodeJSON(r, &input) != nil {
+		http.Error(w, "Avatar inválido.", http.StatusBadRequest)
+		return
+	}
+	if err := h.avatars.SelectInternal(r.Context(), identity, input.AvatarType); errors.Is(err, profile.ErrInvalidAvatar) {
+		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
+		return
+	} else if err != nil {
+		h.logger.Error("falha ao selecionar avatar interno")
+		http.Error(w, "Não foi possível atualizar o avatar.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"avatarType": input.AvatarType})
+}
+
+func (h *handler) profilePhoto(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	id := r.PathValue("id")
+	content, err := h.avatars.Read(r.Context(), identity, id)
+	if err != nil {
+		http.Error(w, "Foto não encontrada.", http.StatusNotFound)
+		return
+	}
+	etag := fmt.Sprintf(`"%x"`, sha256.Sum256(content))
+	w.Header().Set("Cache-Control", "private, max-age=0, must-revalidate")
+	w.Header().Set("ETag", etag)
+	w.Header().Set("Content-Type", "image/jpeg")
+	w.Header().Set("Content-Disposition", `inline; filename="foto-perfil.jpg"`)
+	w.Header().Set("X-Content-Type-Options", "nosniff")
+	if r.Header.Get("If-None-Match") == etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(content)
 }
 
 type habitRequest struct {

@@ -5,6 +5,7 @@ import (
 	"fmt"
 
 	"cloud.google.com/go/firestore"
+	cloudstorage "cloud.google.com/go/storage"
 	firebase "firebase.google.com/go/v4"
 	firebaseauth "firebase.google.com/go/v4/auth"
 )
@@ -12,10 +13,14 @@ import (
 type Clients struct {
 	Auth      *firebaseauth.Client
 	Firestore *firestore.Client
+	Storage   *cloudstorage.BucketHandle
 }
 
-func New(ctx context.Context, projectID string) (*Clients, error) {
-	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID})
+func New(ctx context.Context, projectID, storageBucket string) (*Clients, error) {
+	if storageBucket == "" {
+		return nil, fmt.Errorf("bucket do Firebase Storage não informado")
+	}
+	app, err := firebase.NewApp(ctx, &firebase.Config{ProjectID: projectID, StorageBucket: storageBucket})
 	if err != nil {
 		return nil, fmt.Errorf("inicializar Firebase Admin: %w", err)
 	}
@@ -27,7 +32,15 @@ func New(ctx context.Context, projectID string) (*Clients, error) {
 	if err != nil {
 		return nil, fmt.Errorf("inicializar Firestore: %w", err)
 	}
-	return &Clients{Auth: authClient, Firestore: firestoreClient}, nil
+	storageClient, err := app.Storage(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("inicializar Firebase Storage: %w", err)
+	}
+	bucket, err := storageClient.DefaultBucket()
+	if err != nil {
+		return nil, fmt.Errorf("inicializar bucket: %w", err)
+	}
+	return &Clients{Auth: authClient, Firestore: firestoreClient, Storage: bucket}, nil
 }
 
 func (c *Clients) Close() error {

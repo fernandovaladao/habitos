@@ -15,8 +15,10 @@ func resetConfigEnvironment(t *testing.T) {
 		"FIREBASE_WEB_API_KEY",
 		"FIREBASE_AUTH_DOMAIN",
 		"FIREBASE_APP_ID",
+		"FIREBASE_STORAGE_BUCKET",
 		"FIREBASE_AUTH_EMULATOR_HOST",
 		"FIRESTORE_EMULATOR_HOST",
+		"FIREBASE_STORAGE_EMULATOR_HOST",
 		"GCLOUD_PROJECT",
 		"GOOGLE_APPLICATION_CREDENTIALS",
 		"FIREBASE_CONFIG",
@@ -36,6 +38,7 @@ func setRequiredFirebaseEnvironment(t *testing.T) {
 	t.Setenv("FIREBASE_WEB_API_KEY", "public-key")
 	t.Setenv("FIREBASE_AUTH_DOMAIN", "project.firebaseapp.com")
 	t.Setenv("FIREBASE_APP_ID", "app-id")
+	t.Setenv("FIREBASE_STORAGE_BUCKET", "project.appspot.com")
 	t.Setenv("OPENAI_API_KEY", "openai-test-key")
 	t.Setenv("OPENAI_MODEL", "gpt-5.6-luna")
 	t.Setenv("AI_REQUEST_TIMEOUT", "10s")
@@ -93,6 +96,7 @@ func TestLoadAcceptsValidLocalEmulatorConfiguration(t *testing.T) {
 	t.Setenv("GCLOUD_PROJECT", LocalEmulatorProjectID)
 	t.Setenv("FIREBASE_AUTH_EMULATOR_HOST", LocalAuthEmulatorHost)
 	t.Setenv("FIRESTORE_EMULATOR_HOST", LocalFirestoreEmulatorHost)
+	t.Setenv("FIREBASE_STORAGE_EMULATOR_HOST", LocalStorageEmulatorHost)
 
 	config, err := Load()
 	if err != nil {
@@ -111,6 +115,7 @@ func TestLoadRejectsRealProjectWithEmulators(t *testing.T) {
 	t.Setenv("FIREBASE_PROJECT_ID", "projeto-real")
 	t.Setenv("FIREBASE_AUTH_EMULATOR_HOST", LocalAuthEmulatorHost)
 	t.Setenv("FIRESTORE_EMULATOR_HOST", LocalFirestoreEmulatorHost)
+	t.Setenv("FIREBASE_STORAGE_EMULATOR_HOST", LocalStorageEmulatorHost)
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() deveria rejeitar projeto diferente do demo local")
@@ -124,6 +129,6 @@ func TestLoadRejectsPartialEmulatorConfiguration(t *testing.T) {
 	t.Setenv("FIRESTORE_EMULATOR_HOST", "")
 
 	if _, err := Load(); err == nil {
-		t.Fatal("Load() deveria exigir Auth e Firestore Emulator juntos")
+		t.Fatal("Load() deveria exigir Auth, Firestore e Storage Emulator juntos")
 	}
 }

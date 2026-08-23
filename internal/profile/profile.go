@@ -27,6 +27,9 @@ type Profile struct {
 	HeightHundredths            int64      `firestore:"heightHundredths" json:"heightHundredths"`
 	Gender                      string     `firestore:"gender" json:"gender"`
 	AvatarType                  string     `firestore:"avatarType" json:"avatarType"`
+	PhotoMediaID                string     `firestore:"photoMediaId,omitempty" json:"-"`
+	PhotoObjectPath             string     `firestore:"photoObjectPath,omitempty" json:"-"`
+	PhotoUpdatedAt              *time.Time `firestore:"photoUpdatedAt,omitempty" json:"-"`
 	Timezone                    string     `firestore:"timezone" json:"timezone"`
 	RankingOptIn                bool       `firestore:"rankingOptIn" json:"rankingOptIn"`
 	ReminderNotificationEnabled bool       `firestore:"reminderNotificationEnabled" json:"reminderNotificationEnabled"`

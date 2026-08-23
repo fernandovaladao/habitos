@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"image"
+	"image/png"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -15,6 +18,7 @@ import (
 
 	"cloud.google.com/go/firestore"
 	"habitos/internal/auth"
+	"habitos/internal/avatar"
 	"habitos/internal/config"
 	"habitos/internal/execution"
 	"habitos/internal/firebaseadmin"
@@ -34,7 +38,8 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	clients, err := firebaseadmin.New(ctx, config.LocalEmulatorProjectID)
+	bucketName := config.LocalEmulatorProjectID + ".appspot.com"
+	clients, err := firebaseadmin.New(ctx, config.LocalEmulatorProjectID, bucketName)
 	if err != nil {
 		t.Fatalf("inicializar clientes Firebase: %v", err)
 	}
@@ -142,6 +147,72 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	}
 	if _, leaked := repairedSnapshot.Data()["email"]; leaked {
 		t.Fatalf("reparo preservou campo privado: %#v", repairedSnapshot.Data())
+	}
+
+	avatarService := avatar.NewService(avatar.NewFirestoreRepository(clients.Firestore), avatar.NewStorage(clients.Storage))
+	var photoInput bytes.Buffer
+	if err := png.Encode(&photoInput, image.NewRGBA(image.Rect(0, 0, 640, 480))); err != nil {
+		t.Fatalf("preparar foto: %v", err)
+	}
+	privatePhoto, err := avatarService.Upload(ctx, identity, &photoInput)
+	if err != nil {
+		t.Fatalf("enviar foto privada: %v", err)
+	}
+	t.Cleanup(func() { _ = clients.Storage.Object(privatePhoto.ObjectPath).Delete(context.Background()) })
+	if !strings.HasPrefix(privatePhoto.ObjectPath, "avatars/"+uid+"/") {
+		t.Fatalf("caminho não derivado do UID: %q", privatePhoto.ObjectPath)
+	}
+	photoProfile, err := profiles.Get(ctx, identity)
+	if err != nil || photoProfile.PhotoMediaID != privatePhoto.ID || photoProfile.PhotoObjectPath != privatePhoto.ObjectPath || photoProfile.PhotoUpdatedAt == nil {
+		t.Fatalf("perfil sem referência privada: %#v erro=%v", photoProfile, err)
+	}
+	photoProjectionSnapshot, err := projectionDoc.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler projeção após foto: %v", err)
+	}
+	var photoProjection ranking.Entry
+	if err := photoProjectionSnapshot.DataTo(&photoProjection); err != nil || photoProjection.AvatarType != profile.AvatarPurple || photoProjection.AvatarURL != "" {
+		t.Fatalf("foto privada vazou ou mudou avatar público: %#v erro=%v", photoProjection, err)
+	}
+	for _, privateField := range []string{"photoMediaId", "photoObjectPath", "photoUpdatedAt"} {
+		if _, leaked := photoProjectionSnapshot.Data()[privateField]; leaked {
+			t.Fatalf("projeção contém campo privado %q: %#v", privateField, photoProjectionSnapshot.Data())
+		}
+	}
+	if content, err := avatarService.Read(ctx, identity, privatePhoto.ID); err != nil || len(content) == 0 {
+		t.Fatalf("proprietário não leu foto: bytes=%d erro=%v", len(content), err)
+	}
+	if _, err := avatarService.Read(ctx, auth.Identity{UID: "outro-uid"}, privatePhoto.ID); !errors.Is(err, avatar.ErrNotFound) {
+		t.Fatalf("outro usuário leu foto: %v", err)
+	}
+	oversizedPath := "avatars/" + uid + "/objeto-excessivo.jpg"
+	objectStorage := avatar.NewStorage(clients.Storage)
+	if err := objectStorage.Write(ctx, oversizedPath, bytes.Repeat([]byte{'x'}, avatar.MaxStoredBytes+1)); err != nil {
+		t.Fatalf("preparar objeto excessivo: %v", err)
+	}
+	t.Cleanup(func() { _ = clients.Storage.Object(oversizedPath).Delete(context.Background()) })
+	if value, err := objectStorage.Read(ctx, oversizedPath); !errors.Is(err, avatar.ErrTooLarge) || value != nil {
+		t.Fatalf("Storage.Read truncou objeto excessivo: bytes=%d erro=%v", len(value), err)
+	}
+	directURL := "http://" + config.LocalStorageEmulatorHost + "/v0/b/" + url.PathEscape(bucketName) + "/o/" + url.PathEscape(privatePhoto.ObjectPath) + "?alt=media"
+	directRequest, _ := http.NewRequestWithContext(ctx, http.MethodGet, directURL, nil)
+	directResponse, directErr := http.DefaultClient.Do(directRequest)
+	if directErr != nil {
+		t.Fatalf("consultar Storage Emulator diretamente: %v", directErr)
+	}
+	_ = directResponse.Body.Close()
+	if directResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("rules permitiram acesso direto: status=%d", directResponse.StatusCode)
+	}
+	if err := avatarService.SelectInternal(ctx, identity, profile.AvatarPurple); err != nil {
+		t.Fatalf("selecionar avatar interno: %v", err)
+	}
+	afterInternal, _ := profiles.Get(ctx, identity)
+	if afterInternal.PhotoMediaID != "" || afterInternal.PhotoObjectPath != "" || afterInternal.PhotoUpdatedAt != nil {
+		t.Fatalf("seleção interna preservou referência privada: %#v", afterInternal)
+	}
+	if _, err := clients.Storage.Object(privatePhoto.ObjectPath).Attrs(ctx); err == nil {
+		t.Fatal("objeto privado anterior não foi removido")
 	}
 
 	habitRepository := habit.NewFirestoreRepository(clients.Firestore)
@@ -573,10 +644,11 @@ func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid str
 func requireLocalEnvironment(t *testing.T) {
 	t.Helper()
 	want := map[string]string{
-		"FIREBASE_PROJECT_ID":         config.LocalEmulatorProjectID,
-		"GCLOUD_PROJECT":              config.LocalEmulatorProjectID,
-		"FIREBASE_AUTH_EMULATOR_HOST": config.LocalAuthEmulatorHost,
-		"FIRESTORE_EMULATOR_HOST":     config.LocalFirestoreEmulatorHost,
+		"FIREBASE_PROJECT_ID":            config.LocalEmulatorProjectID,
+		"GCLOUD_PROJECT":                 config.LocalEmulatorProjectID,
+		"FIREBASE_AUTH_EMULATOR_HOST":    config.LocalAuthEmulatorHost,
+		"FIRESTORE_EMULATOR_HOST":        config.LocalFirestoreEmulatorHost,
+		"FIREBASE_STORAGE_EMULATOR_HOST": config.LocalStorageEmulatorHost,
 	}
 	for name, expected := range want {
 		if value := os.Getenv(name); value != expected {

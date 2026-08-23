@@ -181,6 +181,9 @@ p { color: var(--muted); font-size: 1.05rem; }
 .profile-heading { display: flex; align-items: center; gap: 20px; margin-bottom: 28px; }
 .profile-heading h1, .profile-heading p { margin-bottom: 4px; }
 .profile-avatar { width: 76px; height: 76px; flex: 0 0 auto; display: grid; place-items: center; color: var(--blue-700); background: var(--blue-100); border-radius: 50%; }
+.profile-avatar img { width: 100%; height: 100%; object-fit: cover; border-radius: inherit; }
+.avatar-settings { display: grid; gap: 1rem; }
+.avatar-settings form { display: grid; gap: .75rem; }
 .profile-summary { display: flex; align-items: center; gap: 1rem; }
 .profile-sections { display: grid; gap: 1rem; }
 .profile-avatar--default { color: #1659a8; background: #dce9f8; }

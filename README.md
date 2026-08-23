@@ -12,7 +12,7 @@ Permitir criar hábitos, definir metas e lembretes, registrar execuções, acomp
 - Hospedagem: Google Cloud Run
 - Banco: Google Cloud Firestore
 - Autenticação: Firebase Authentication
-- Fotos: Cloud Storage/Firebase Storage
+- Fotos privadas de perfil: Cloud Storage/Firebase Storage, acessado somente pelo backend
 - IA: API acessada somente pelo backend Go
 - Versionamento: Git + GitHub
 
@@ -61,6 +61,7 @@ Variáveis obrigatórias:
 - `FIREBASE_WEB_API_KEY`
 - `FIREBASE_AUTH_DOMAIN`
 - `FIREBASE_APP_ID`
+- `FIREBASE_STORAGE_BUCKET`
 - `OPENAI_API_KEY`
 
 Configuração da sugestão de hábito com IA:
@@ -81,6 +82,8 @@ export FIREBASE_PROJECT_ID=demo-habitos-local
 export GCLOUD_PROJECT=demo-habitos-local
 export FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
 export FIRESTORE_EMULATOR_HOST=127.0.0.1:8081
+export FIREBASE_STORAGE_EMULATOR_HOST=127.0.0.1:9199
+export FIREBASE_STORAGE_BUCKET=demo-habitos-local.appspot.com
 ```
 
 O host do Auth Emulator não deve conter `http://`. O backend e a configuração pública entregue ao browser são ajustados automaticamente. Quando um emulador está configurado, o backend rejeita qualquer project ID diferente de `demo-habitos-local`. Fora dos emuladores, o SDK usa Application Default Credentials; localmente, `GOOGLE_APPLICATION_CREDENTIALS` pode apontar para um arquivo mantido fora do repositório.
@@ -93,15 +96,16 @@ As portas configuradas em `firebase.json` são:
 
 - Authentication Emulator: `127.0.0.1:9099`
 - Firestore Emulator: `127.0.0.1:8081`
+- Storage Emulator: `127.0.0.1:9199`
 - Emulator Suite UI: `127.0.0.1:4000`
 - Backend HÁBITOS: `127.0.0.1:8080`
 
-No primeiro terminal, inicie somente Authentication e Firestore:
+No primeiro terminal, inicie Authentication, Firestore e Storage:
 
 ```bash
 npx firebase-tools@15.25.1 emulators:start \
   --project demo-habitos-local \
-  --only auth,firestore
+  --only auth,firestore,storage
 ```
 
 Se o Firebase CLI já estiver instalado globalmente:
@@ -109,7 +113,7 @@ Se o Firebase CLI já estiver instalado globalmente:
 ```bash
 firebase emulators:start \
   --project demo-habitos-local \
-  --only auth,firestore
+  --only auth,firestore,storage
 ```
 
 No segundo terminal, copie e carregue a configuração local e inicie o backend:
@@ -122,7 +126,7 @@ set +a
 go run ./cmd/web
 ```
 
-Não defina `GOOGLE_APPLICATION_CREDENTIALS` nesse fluxo. O Admin SDK recebe explicitamente `demo-habitos-local`, o Auth Emulator recebe o mesmo valor por `GCLOUD_PROJECT` e o Firestore usa `FIRESTORE_EMULATOR_HOST`.
+Não defina `GOOGLE_APPLICATION_CREDENTIALS` nesse fluxo. O Admin SDK recebe explicitamente `demo-habitos-local`, o Auth Emulator recebe o mesmo valor por `GCLOUD_PROJECT`, o Firestore usa `FIRESTORE_EMULATOR_HOST` e o Storage usa `FIREBASE_STORAGE_EMULATOR_HOST`. As fotos permanecem privadas e são servidas somente pelo backend após autorização; `storage.rules` nega acesso direto de clientes.
 
 O frontend consulta `/api/firebase-config`. Quando `FIREBASE_AUTH_EMULATOR_HOST` está definido, a resposta inclui `authEmulatorUrl=http://127.0.0.1:9099`, e o Firebase Web SDK chama `connectAuthEmulator` antes de autenticar.
 
@@ -149,11 +153,11 @@ Também é possível deixar o Firebase CLI iniciar e encerrar os emuladores ao r
 ```bash
 npx firebase-tools@15.25.1 emulators:exec \
   --project demo-habitos-local \
-  --only auth,firestore \
+  --only auth,firestore,storage \
   "RUN_FIREBASE_EMULATOR_TESTS=1 go test -v ./tests/integration"
 ```
 
-O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade e testa perfil, hábitos, versionamento de agenda, materialização e registro concorrentes de execuções e CRUD autorizado de notas no Firestore Emulator.
+O teste falha antes de acessar a rede se project ID e hosts não corresponderem exatamente à configuração local. Ele cria uma conta temporária no Auth Emulator, troca o ID token por sessão, valida a identidade e testa perfil, foto privada, regras do Storage, hábitos, versionamento de agenda, materialização e registro concorrentes de execuções e CRUD autorizado de notas.
 
 `APP_ENV=production` torna o cookie de sessão obrigatoriamente seguro. Em desenvolvimento HTTP, use `SESSION_COOKIE_SECURE=false`. Sessões duram 5 dias.
 
