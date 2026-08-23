@@ -5,13 +5,31 @@
 <body>
   <header class="site-header">{{template "brand" .}}</header>
   <main class="page-shell profile-shell">
-    <section class="card profile-card">
-      <div class="profile-heading">
-        <div class="profile-avatar" aria-hidden="true">●</div>
-        <div><p class="eyebrow">Perfil básico</p><h1>{{if .Profile.Nickname}}{{.Profile.Nickname}}{{else}}Complete seu perfil{{end}}</h1><p>{{.Email}}</p></div>
+    <section class="card profile-summary">
+      <div class="profile-avatar profile-avatar--{{if .Profile.AvatarType}}{{.Profile.AvatarType}}{{else}}default{{end}}" aria-hidden="true">●</div>
+      <div>
+        <p class="eyebrow">Perfil e configurações</p>
+        <h1>{{if .Profile.Nickname}}{{.Profile.Nickname}}{{else}}Complete seu perfil{{end}}</h1>
+        <p><strong>{{.Profile.TotalPoints}} pontos</strong>{{with .ProfileRank}} · {{.Position}}º no ranking geral{{end}}</p>
       </div>
-      {{if not .Profile.ProfileComplete}}<div class="notice">Informe um apelido e uma idade válidos para concluir seu perfil.</div>{{end}}
-      <form data-profile-form>
+    </section>
+
+    {{if not .Profile.ProfileComplete}}<div class="notice">Informe um apelido e uma idade válidos para concluir seu perfil.</div>{{end}}
+    <form class="profile-sections" data-profile-form>
+      <section class="card profile-card">
+        <h2>Avatar</h2>
+        <p class="field-help">Escolha um avatar interno para representar você. Ele poderá aparecer no ranking quando sua participação estiver ativada.</p>
+        <fieldset class="avatar-picker"><legend class="sr-only">Escolha o avatar</legend>
+          <label><input type="radio" name="avatarType" value="default" {{if or (eq .Profile.AvatarType "") (eq .Profile.AvatarType "default")}}checked{{end}}><span class="profile-avatar profile-avatar--default" aria-hidden="true">●</span><span>Padrão</span></label>
+          <label><input type="radio" name="avatarType" value="blue" {{if eq .Profile.AvatarType "blue"}}checked{{end}}><span class="profile-avatar profile-avatar--blue" aria-hidden="true">●</span><span>Azul</span></label>
+          <label><input type="radio" name="avatarType" value="orange" {{if eq .Profile.AvatarType "orange"}}checked{{end}}><span class="profile-avatar profile-avatar--orange" aria-hidden="true">●</span><span>Laranja</span></label>
+          <label><input type="radio" name="avatarType" value="green" {{if eq .Profile.AvatarType "green"}}checked{{end}}><span class="profile-avatar profile-avatar--green" aria-hidden="true">●</span><span>Verde</span></label>
+          <label><input type="radio" name="avatarType" value="purple" {{if eq .Profile.AvatarType "purple"}}checked{{end}}><span class="profile-avatar profile-avatar--purple" aria-hidden="true">●</span><span>Roxo</span></label>
+        </fieldset>
+      </section>
+
+      <section class="card profile-card">
+        <h2>Perfil</h2>
         <label for="nickname">Apelido</label>
         <input id="nickname" name="nickname" type="text" minlength="3" maxlength="24" value="{{.Profile.Nickname}}" required aria-describedby="nickname-help">
         <small id="nickname-help">3–24 caracteres: letras, números, espaços, _ ou -.</small>
@@ -30,11 +48,30 @@
           <input id="ranking-opt-in" name="rankingOptIn" type="checkbox" {{if .Profile.RankingOptIn}}checked{{end}}>
           Quero participar publicamente do ranking geral.
         </label>
-        <p class="form-message" data-form-message role="status" aria-live="polite"></p>
-        <button class="button button--primary" type="submit">Salvar perfil</button>
-      </form>
-      <div class="form-links"><a href="/alterar-senha">Alterar senha</a></div>
-    </section>
+      </section>
+
+      <section class="card profile-card">
+        <h2>Preferências de lembretes</h2>
+        <p class="field-help">Estas opções funcionarão como bloqueio mestre de cada canal. O envio real de lembretes ainda não está ativo.</p>
+        <label class="checkbox-row" for="reminder-notification-enabled">
+          <input id="reminder-notification-enabled" name="reminderNotificationEnabled" type="checkbox" {{if .Profile.ReminderNotificationEnabled}}checked{{end}}>
+          Permitir lembretes por Notificação
+        </label>
+        <label class="checkbox-row" for="reminder-email-enabled">
+          <input id="reminder-email-enabled" name="reminderEmailEnabled" type="checkbox" {{if .Profile.ReminderEmailEnabled}}checked{{end}}>
+          Permitir lembretes por E-mail
+        </label>
+      </section>
+
+      <section class="card profile-card">
+        <h2>Conta e segurança</h2>
+        <p><strong>E-mail:</strong> {{.Email}}</p>
+        <a href="/alterar-senha">Alterar senha</a>
+      </section>
+
+      <p class="form-message" data-form-message role="status" aria-live="polite"></p>
+      <button class="button button--primary" type="submit">Salvar perfil e preferências</button>
+    </form>
   </main>
   {{template "navigation" .}}
   <script type="module" src="/static/js/profile.js"></script>

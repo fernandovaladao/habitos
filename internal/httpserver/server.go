@@ -76,6 +76,7 @@ type pageData struct {
 	HabitTitles       map[string]string
 	Progress          progress.Report
 	Ranking           ranking.Board
+	ProfileRank       *ranking.PublicEntry
 	FirebaseEnabled   bool
 }
 
@@ -227,7 +228,17 @@ func (h *handler) profilePage(w http.ResponseWriter, r *http.Request) {
 		h.render(w, http.StatusInternalServerError, "error", pageData{Title: "Erro", Description: "Não foi possível carregar seu perfil.", Authenticated: true})
 		return
 	}
-	h.render(w, http.StatusOK, "profile", pageData{Title: "Perfil", Description: "Seu perfil básico.", Path: "/perfil", Authenticated: true, Email: identity.Email, Profile: userProfile})
+	var profileRank *ranking.PublicEntry
+	if userProfile.RankingOptIn && userProfile.ProfileComplete {
+		position, err := h.ranking.Position(r.Context(), identity)
+		if err != nil {
+			h.logger.Error("falha ao carregar posição do perfil", "error", err)
+			h.render(w, http.StatusInternalServerError, "error", pageData{Title: "Erro", Description: "Não foi possível carregar seu perfil.", Authenticated: true})
+			return
+		}
+		profileRank = &position
+	}
+	h.render(w, http.StatusOK, "profile", pageData{Title: "Perfil", Description: "Seu perfil e preferências.", Path: "/perfil", Authenticated: true, Email: identity.Email, Profile: userProfile, ProfileRank: profileRank})
 }
 
 func (h *handler) authenticatedProfile(r *http.Request) (auth.Identity, profile.Profile, error) {
@@ -566,13 +577,16 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var input struct {
-		Nickname     string `json:"nickname"`
-		Age          int    `json:"age"`
-		Timezone     string `json:"timezone"`
-		RankingOptIn bool   `json:"rankingOptIn"`
-		Weight       string `json:"weight"`
-		Height       string `json:"height"`
-		Gender       string `json:"gender"`
+		Nickname                    string `json:"nickname"`
+		Age                         int    `json:"age"`
+		Timezone                    string `json:"timezone"`
+		RankingOptIn                bool   `json:"rankingOptIn"`
+		Weight                      string `json:"weight"`
+		Height                      string `json:"height"`
+		Gender                      string `json:"gender"`
+		AvatarType                  string `json:"avatarType"`
+		ReminderNotificationEnabled bool   `json:"reminderNotificationEnabled"`
+		ReminderEmailEnabled        bool   `json:"reminderEmailEnabled"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		http.Error(w, "Dados de perfil inválidos.", http.StatusBadRequest)
@@ -599,8 +613,9 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	}
 	userProfile, err := h.profiles.Update(r.Context(), identity, profile.Update{
 		Nickname: input.Nickname, Age: input.Age, Timezone: input.Timezone, RankingOptIn: input.RankingOptIn, WeightHundredths: weight, HeightHundredths: height, Gender: input.Gender,
+		AvatarType: input.AvatarType, ReminderNotificationEnabled: input.ReminderNotificationEnabled, ReminderEmailEnabled: input.ReminderEmailEnabled,
 	})
-	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) || errors.Is(err, profile.ErrInvalidWeight) || errors.Is(err, profile.ErrInvalidHeight) || errors.Is(err, profile.ErrInvalidGender) {
+	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) || errors.Is(err, profile.ErrInvalidWeight) || errors.Is(err, profile.ErrInvalidHeight) || errors.Is(err, profile.ErrInvalidGender) || errors.Is(err, profile.ErrInvalidAvatar) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
 		return
 	}

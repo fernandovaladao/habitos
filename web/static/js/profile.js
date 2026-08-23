@@ -22,7 +22,10 @@ if (form) {
         rankingOptIn: form.elements.rankingOptIn.checked,
         weight: form.elements.weight.value,
         height: form.elements.height.value,
-        gender: form.elements.gender.value
+        gender: form.elements.gender.value,
+        avatarType: form.elements.avatarType.value,
+        reminderNotificationEnabled: form.elements.reminderNotificationEnabled.checked,
+        reminderEmailEnabled: form.elements.reminderEmailEnabled.checked
       }, csrf);
       message.textContent = "Perfil atualizado.";
     } catch (error) {

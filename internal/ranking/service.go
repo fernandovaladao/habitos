@@ -17,6 +17,21 @@ type Service struct{ repository Repository }
 
 func NewService(repository Repository) *Service { return &Service{repository: repository} }
 
+func (s *Service) Position(ctx context.Context, identity auth.Identity) (PublicEntry, error) {
+	if identity.UID == "" {
+		return PublicEntry{}, auth.ErrInvalidSession
+	}
+	self, err := s.repository.Get(ctx, identity.UID)
+	if err != nil {
+		return PublicEntry{}, err
+	}
+	before, err := s.repository.CountBefore(ctx, self)
+	if err != nil {
+		return PublicEntry{}, err
+	}
+	return ToPublic(self, before+1, true), nil
+}
+
 func (s *Service) Board(ctx context.Context, identity auth.Identity, participating bool) (Board, error) {
 	if identity.UID == "" {
 		return Board{}, auth.ErrInvalidSession

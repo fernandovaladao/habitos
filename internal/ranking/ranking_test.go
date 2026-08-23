@@ -93,3 +93,14 @@ func TestFirstPlaceHasNoDistance(t *testing.T) {
 		t.Fatalf("quadro = %#v, erro=%v", board, err)
 	}
 }
+
+func TestPositionReadsOnlyAuthenticatedParticipant(t *testing.T) {
+	repository := &memoryRepository{self: Entry{UID: "self", Nickname: "Luna", AvatarType: "purple", TotalPoints: 300}, count: 4}
+	position, err := NewService(repository).Position(context.Background(), auth.Identity{UID: "self"})
+	if err != nil || position.Position != 5 || position.Avatar.Type != "purple" {
+		t.Fatalf("posição=%#v erro=%v", position, err)
+	}
+	if _, err := NewService(repository).Position(context.Background(), auth.Identity{}); !errors.Is(err, auth.ErrInvalidSession) {
+		t.Fatalf("identidade vazia: %v", err)
+	}
+}

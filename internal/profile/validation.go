@@ -15,6 +15,7 @@ var (
 	ErrInvalidWeight   = errors.New("peso deve ser positivo e ter até 2 casas decimais")
 	ErrInvalidHeight   = errors.New("altura deve ser positiva e ter até 2 casas decimais")
 	ErrInvalidGender   = errors.New("gênero deve ter no máximo 100 caracteres")
+	ErrInvalidAvatar   = errors.New("avatar interno inválido")
 	nicknamePattern    = regexp.MustCompile(`^[\p{L}\p{N} _-]+$`)
 )
 
@@ -52,7 +53,19 @@ func ValidateUpdate(update Update) error {
 	if err := ValidateTimezone(update.Timezone); err != nil {
 		return err
 	}
+	if !ValidAvatarType(update.AvatarType) {
+		return ErrInvalidAvatar
+	}
 	return ValidateDemographics(Demographics{Age: update.Age, WeightHundredths: update.WeightHundredths, HeightHundredths: update.HeightHundredths, Gender: update.Gender})
+}
+
+func ValidAvatarType(value string) bool {
+	switch value {
+	case AvatarDefault, AvatarBlue, AvatarOrange, AvatarGreen, AvatarPurple:
+		return true
+	default:
+		return false
+	}
 }
 
 func ValidateDemographics(value Demographics) error {

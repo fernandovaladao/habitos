@@ -84,6 +84,9 @@ func (r *fakeProfileRepository) Update(_ context.Context, uid string, update pro
 	value.WeightHundredths = update.WeightHundredths
 	value.HeightHundredths = update.HeightHundredths
 	value.Gender = update.Gender
+	value.AvatarType = update.AvatarType
+	value.ReminderNotificationEnabled = update.ReminderNotificationEnabled
+	value.ReminderEmailEnabled = update.ReminderEmailEnabled
 	value.ProfileComplete = true
 	value.UpdatedAt = updatedAt
 	r.profiles[uid] = value
@@ -685,13 +688,13 @@ func TestProgressRejectsCustomPeriodLongerThan366Days(t *testing.T) {
 
 func TestRankingTopIsVisibleWithoutOptInAndPrivateFieldsStayAbsent(t *testing.T) {
 	app := newTestApp(t)
-	app.ranking.top = []ranking.Entry{{UID: "ranked-uid", Nickname: "Luna", AvatarType: ranking.DefaultAvatarType, TotalPoints: 2430}}
+	app.ranking.top = []ranking.Entry{{UID: "ranked-uid", Nickname: "Luna", AvatarType: profile.AvatarPurple, TotalPoints: 2430}}
 	recorder := httptest.NewRecorder()
 	request := httptest.NewRequest(http.MethodGet, "/recompensas", nil)
 	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
 	app.handler.ServeHTTP(recorder, request)
 	body := recorder.Body.String()
-	if recorder.Code != http.StatusOK || !strings.Contains(body, "Luna") || !strings.Contains(body, "ative a participação no Perfil") {
+	if recorder.Code != http.StatusOK || !strings.Contains(body, "Luna") || !strings.Contains(body, "ranking-avatar--purple") || !strings.Contains(body, "ative a participação no Perfil") {
 		t.Fatalf("status=%d corpo=%s", recorder.Code, body)
 	}
 	for _, private := range []string{"ranked-uid", "a@example.com", "America/Sao_Paulo", "weightHundredths"} {
@@ -776,7 +779,7 @@ func TestEnsureAndUpdateProfileUseAuthenticatedUID(t *testing.T) {
 	}
 
 	updateRecorder := httptest.NewRecorder()
-	updateRequest := httptest.NewRequest(http.MethodPut, "/api/profile?userId=firebase-user-b", bytes.NewBufferString(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":true}`))
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/profile?userId=firebase-user-b", bytes.NewBufferString(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":true,"avatarType":"orange","reminderNotificationEnabled":true,"reminderEmailEnabled":false}`))
 	updateRequest.Header.Set(csrf.HeaderName, token)
 	updateRequest.AddCookie(csrfCookie)
 	updateRequest.AddCookie(sessionCookie)
@@ -786,6 +789,38 @@ func TestEnsureAndUpdateProfileUseAuthenticatedUID(t *testing.T) {
 	}
 	if app.profiles.lastUID != "firebase-user-a" {
 		t.Fatalf("UID atualizado = %q", app.profiles.lastUID)
+	}
+	updated := app.profiles.profiles["firebase-user-a"]
+	if updated.AvatarType != profile.AvatarOrange || !updated.ReminderNotificationEnabled || updated.ReminderEmailEnabled {
+		t.Fatalf("perfil atualizado = %#v", updated)
+	}
+}
+
+func TestProfileShowsRealPositionOnlyForOptIn(t *testing.T) {
+	app := newTestApp(t)
+	now := time.Now().UTC()
+	app.profiles.profiles["firebase-user-a"] = profile.Profile{UID: "firebase-user-a", Email: "a@example.com", Nickname: "Nico", Age: 15, AvatarType: profile.AvatarPurple, Timezone: "UTC", RankingOptIn: true, ProfileComplete: true, TotalPoints: 125, CreatedAt: now, UpdatedAt: now}
+	app.ranking.self = ranking.Entry{UID: "firebase-user-a", Nickname: "Nico", AvatarType: profile.AvatarPurple, TotalPoints: 125}
+	app.ranking.count = 8
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/perfil", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	body := recorder.Body.String()
+	if recorder.Code != http.StatusOK || !strings.Contains(body, "125 pontos") || !strings.Contains(body, "9º no ranking geral") || !strings.Contains(body, "profile-avatar--purple") {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, body)
+	}
+
+	value := app.profiles.profiles["firebase-user-a"]
+	value.RankingOptIn = false
+	app.profiles.profiles["firebase-user-a"] = value
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/perfil", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if strings.Contains(recorder.Body.String(), "9º no ranking geral") {
+		t.Fatal("posição exibida para usuário sem opt-in")
 	}
 }
 

@@ -60,6 +60,14 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 		t.Fatalf("identidade = %#v, esperado UID %q e e-mail %q", identity, uid, email)
 	}
 
+	userDocument := clients.Firestore.Collection("users").Doc(uid)
+	legacyNow := time.Now().UTC().Truncate(time.Microsecond)
+	if _, err := userDocument.Set(ctx, map[string]interface{}{
+		"id": uid, "email": email, "nickname": "", "age": 0, "timezone": "America/Sao_Paulo",
+		"rankingOptIn": false, "profileComplete": false, "totalPoints": int64(0), "createdAt": legacyNow, "updatedAt": legacyNow,
+	}); err != nil {
+		t.Fatalf("criar documento legado: %v", err)
+	}
 	profiles := profile.NewService(profile.NewFirestoreRepository(clients.Firestore))
 	first, err := profiles.EnsureProfile(ctx, identity, "America/Sao_Paulo")
 	if err != nil {
@@ -75,9 +83,22 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	if first.RankingOptIn || first.ProfileComplete {
 		t.Fatalf("perfil mínimo deveria ser privado e incompleto: %#v", first)
 	}
-	participantProfile, err := profiles.Update(ctx, identity, profile.Update{Nickname: "Pessoa local", Age: 15, Timezone: "America/Sao_Paulo", RankingOptIn: true})
+	if first.AvatarType != profile.AvatarDefault || !first.ReminderNotificationEnabled || !first.ReminderEmailEnabled {
+		t.Fatalf("perfil legado não recebeu padrões: %#v", first)
+	}
+	legacyReconciled, err := userDocument.Get(ctx)
+	if err != nil {
+		t.Fatalf("ler perfil legado reconciliado: %v", err)
+	}
+	if legacyReconciled.Data()["avatarType"] != profile.AvatarDefault || legacyReconciled.Data()["reminderNotificationEnabled"] != true || legacyReconciled.Data()["reminderEmailEnabled"] != true {
+		t.Fatalf("campos legados não foram persistidos: dados=%#v", legacyReconciled.Data())
+	}
+	participantProfile, err := profiles.Update(ctx, identity, profile.Update{Nickname: "Pessoa local", Age: 15, Timezone: "America/Sao_Paulo", RankingOptIn: true, AvatarType: profile.AvatarPurple, ReminderNotificationEnabled: true})
 	if err != nil {
 		t.Fatalf("ativar ranking: %v", err)
+	}
+	if participantProfile.AvatarType != profile.AvatarPurple || !participantProfile.ReminderNotificationEnabled || participantProfile.ReminderEmailEnabled {
+		t.Fatalf("avatar/preferências não persistidos: %#v", participantProfile)
 	}
 	projectionDoc := clients.Firestore.Collection(ranking.CollectionName).Doc(uid)
 	projectionSnapshot, err := projectionDoc.Get(ctx)
@@ -85,17 +106,25 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 		t.Fatalf("opt-in não criou projeção: %v", err)
 	}
 	var initialProjection ranking.Entry
-	if err := projectionSnapshot.DataTo(&initialProjection); err != nil || initialProjection.Nickname != participantProfile.Nickname || initialProjection.TotalPoints != 0 || !initialProjection.RankingReachedAt.Equal(participantProfile.CreatedAt) {
+	if err := projectionSnapshot.DataTo(&initialProjection); err != nil || initialProjection.Nickname != participantProfile.Nickname || initialProjection.AvatarType != profile.AvatarPurple || initialProjection.TotalPoints != 0 || !initialProjection.RankingReachedAt.Equal(participantProfile.CreatedAt) {
 		t.Fatalf("projeção inicial inválida: %#v erro=%v", initialProjection, err)
 	}
 	if _, err := projectionDoc.Delete(ctx); err != nil {
 		t.Fatalf("remover projeção para testar reparo: %v", err)
 	}
-	if _, err := profiles.EnsureProfile(ctx, identity, "UTC"); err != nil {
+	reconciledAfterExplicitFalse, err := profiles.EnsureProfile(ctx, identity, "UTC")
+	if err != nil {
 		t.Fatalf("reparar projeção ausente: %v", err)
+	}
+	if reconciledAfterExplicitFalse.ReminderEmailEnabled {
+		t.Fatal("EnsureProfile reativou preferência explicitamente desabilitada")
 	}
 	if _, err := projectionDoc.Get(ctx); err != nil {
 		t.Fatalf("EnsureProfile não reparou projeção: %v", err)
+	}
+	position, err := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore)).Position(ctx, identity)
+	if err != nil || position.Position < 1 || position.Avatar.Type != profile.AvatarPurple {
+		t.Fatalf("posição real do perfil=%#v erro=%v", position, err)
 	}
 	if _, err := projectionDoc.Update(ctx, []firestore.Update{{Path: "nickname", Value: "Divergente"}, {Path: "email", Value: "nao-pode-vazar@example.test"}}); err != nil {
 		t.Fatalf("preparar projeção divergente: %v", err)

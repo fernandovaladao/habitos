@@ -54,6 +54,9 @@ func (r *memoryRepository) Update(_ context.Context, uid string, update Update, 
 	value.WeightHundredths = update.WeightHundredths
 	value.HeightHundredths = update.HeightHundredths
 	value.Gender = update.Gender
+	value.AvatarType = update.AvatarType
+	value.ReminderNotificationEnabled = update.ReminderNotificationEnabled
+	value.ReminderEmailEnabled = update.ReminderEmailEnabled
 	value.ProfileComplete = true
 	value.UpdatedAt = updatedAt
 	r.profiles[uid] = value
@@ -138,6 +141,9 @@ func TestEnsureProfileIsIdempotentAndPrivateByDefault(t *testing.T) {
 	if first.ProfileComplete {
 		t.Fatal("perfil de recuperação deveria iniciar incompleto")
 	}
+	if first.AvatarType != AvatarDefault || !first.ReminderNotificationEnabled || !first.ReminderEmailEnabled {
+		t.Fatalf("padrões do perfil inválidos: %#v", first)
+	}
 }
 
 func TestUpdateUsesAuthenticatedUID(t *testing.T) {
@@ -147,7 +153,8 @@ func TestUpdateUsesAuthenticatedUID(t *testing.T) {
 	service := NewService(repository)
 
 	updated, err := service.Update(context.Background(), auth.Identity{UID: "user-a", Email: "a@example.com"}, Update{
-		Nickname: "Pessoa A", Age: 16, Timezone: "America/Sao_Paulo", RankingOptIn: true,
+		Nickname: "Pessoa A", Age: 16, Timezone: "America/Sao_Paulo", RankingOptIn: true, AvatarType: AvatarGreen,
+		ReminderNotificationEnabled: true, ReminderEmailEnabled: false,
 	})
 	if err != nil {
 		t.Fatalf("Update: %v", err)
@@ -155,6 +162,9 @@ func TestUpdateUsesAuthenticatedUID(t *testing.T) {
 
 	if repository.lastUpdateUID != "user-a" || updated.UID != "user-a" {
 		t.Fatalf("UID atualizado = %q", repository.lastUpdateUID)
+	}
+	if updated.AvatarType != AvatarGreen || !updated.ReminderNotificationEnabled || updated.ReminderEmailEnabled {
+		t.Fatalf("avatar/preferências não persistidos: %#v", updated)
 	}
 	if repository.profiles["user-b"].Nickname != "Outro" {
 		t.Fatal("perfil de outro usuário foi alterado")

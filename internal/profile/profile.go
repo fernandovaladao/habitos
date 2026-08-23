@@ -10,31 +10,45 @@ import (
 
 var ErrNotFound = errors.New("perfil não encontrado")
 
+const (
+	AvatarDefault = "default"
+	AvatarBlue    = "blue"
+	AvatarOrange  = "orange"
+	AvatarGreen   = "green"
+	AvatarPurple  = "purple"
+)
+
 type Profile struct {
-	UID                  string     `firestore:"id" json:"uid"`
-	Email                string     `firestore:"email" json:"email"`
-	Nickname             string     `firestore:"nickname" json:"nickname"`
-	Age                  int        `firestore:"age" json:"age"`
-	WeightHundredths     int64      `firestore:"weightHundredths" json:"weightHundredths"`
-	HeightHundredths     int64      `firestore:"heightHundredths" json:"heightHundredths"`
-	Gender               string     `firestore:"gender" json:"gender"`
-	Timezone             string     `firestore:"timezone" json:"timezone"`
-	RankingOptIn         bool       `firestore:"rankingOptIn" json:"rankingOptIn"`
-	ProfileComplete      bool       `firestore:"profileComplete" json:"profileComplete"`
-	TotalPoints          int64      `firestore:"totalPoints" json:"totalPoints"`
-	TotalPointsReachedAt *time.Time `firestore:"totalPointsReachedAt,omitempty" json:"totalPointsReachedAt,omitempty"`
-	CreatedAt            time.Time  `firestore:"createdAt" json:"createdAt"`
-	UpdatedAt            time.Time  `firestore:"updatedAt" json:"updatedAt"`
+	UID                         string     `firestore:"id" json:"uid"`
+	Email                       string     `firestore:"email" json:"email"`
+	Nickname                    string     `firestore:"nickname" json:"nickname"`
+	Age                         int        `firestore:"age" json:"age"`
+	WeightHundredths            int64      `firestore:"weightHundredths" json:"weightHundredths"`
+	HeightHundredths            int64      `firestore:"heightHundredths" json:"heightHundredths"`
+	Gender                      string     `firestore:"gender" json:"gender"`
+	AvatarType                  string     `firestore:"avatarType" json:"avatarType"`
+	Timezone                    string     `firestore:"timezone" json:"timezone"`
+	RankingOptIn                bool       `firestore:"rankingOptIn" json:"rankingOptIn"`
+	ReminderNotificationEnabled bool       `firestore:"reminderNotificationEnabled" json:"reminderNotificationEnabled"`
+	ReminderEmailEnabled        bool       `firestore:"reminderEmailEnabled" json:"reminderEmailEnabled"`
+	ProfileComplete             bool       `firestore:"profileComplete" json:"profileComplete"`
+	TotalPoints                 int64      `firestore:"totalPoints" json:"totalPoints"`
+	TotalPointsReachedAt        *time.Time `firestore:"totalPointsReachedAt,omitempty" json:"totalPointsReachedAt,omitempty"`
+	CreatedAt                   time.Time  `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt                   time.Time  `firestore:"updatedAt" json:"updatedAt"`
 }
 
 type Update struct {
-	Nickname         string
-	Age              int
-	Timezone         string
-	RankingOptIn     bool
-	WeightHundredths int64
-	HeightHundredths int64
-	Gender           string
+	Nickname                    string
+	Age                         int
+	Timezone                    string
+	RankingOptIn                bool
+	WeightHundredths            int64
+	HeightHundredths            int64
+	Gender                      string
+	AvatarType                  string
+	ReminderNotificationEnabled bool
+	ReminderEmailEnabled        bool
 }
 
 type Demographics struct {
@@ -80,13 +94,16 @@ func (s *Service) EnsureProfile(ctx context.Context, identity auth.Identity, tim
 	}
 	now := normalizeFirestoreTimestamp(s.now())
 	return s.repository.Ensure(ctx, Profile{
-		UID:             identity.UID,
-		Email:           identity.Email,
-		Timezone:        timezone,
-		RankingOptIn:    false,
-		ProfileComplete: false,
-		CreatedAt:       now,
-		UpdatedAt:       now,
+		UID:                         identity.UID,
+		Email:                       identity.Email,
+		Timezone:                    timezone,
+		AvatarType:                  AvatarDefault,
+		RankingOptIn:                false,
+		ReminderNotificationEnabled: true,
+		ReminderEmailEnabled:        true,
+		ProfileComplete:             false,
+		CreatedAt:                   now,
+		UpdatedAt:                   now,
 	})
 }
 
@@ -102,6 +119,9 @@ func (s *Service) Update(ctx context.Context, identity auth.Identity, update Upd
 		return Profile{}, auth.ErrInvalidSession
 	}
 	update.Nickname = NormalizeNickname(update.Nickname)
+	if update.AvatarType == "" {
+		update.AvatarType = AvatarDefault
+	}
 	if err := ValidateUpdate(update); err != nil {
 		return Profile{}, err
 	}

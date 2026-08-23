@@ -8,12 +8,13 @@ func TestValidateUpdate(t *testing.T) {
 		update  Update
 		wantErr bool
 	}{
-		{name: "válido", update: Update{Nickname: "Ana_16", Age: 16, Timezone: "America/Sao_Paulo"}},
-		{name: "apelido curto", update: Update{Nickname: "An", Age: 16, Timezone: "UTC"}, wantErr: true},
-		{name: "caractere inválido", update: Update{Nickname: "Ana!", Age: 16, Timezone: "UTC"}, wantErr: true},
-		{name: "idade zero", update: Update{Nickname: "Ana", Age: 0, Timezone: "UTC"}, wantErr: true},
-		{name: "idade negativa", update: Update{Nickname: "Ana", Age: -1, Timezone: "UTC"}, wantErr: true},
-		{name: "timezone inválido", update: Update{Nickname: "Ana", Age: 16, Timezone: "Sao_Paulo"}, wantErr: true},
+		{name: "válido", update: Update{Nickname: "Ana_16", Age: 16, Timezone: "America/Sao_Paulo", AvatarType: AvatarBlue}},
+		{name: "apelido curto", update: Update{Nickname: "An", Age: 16, Timezone: "UTC", AvatarType: AvatarDefault}, wantErr: true},
+		{name: "caractere inválido", update: Update{Nickname: "Ana!", Age: 16, Timezone: "UTC", AvatarType: AvatarDefault}, wantErr: true},
+		{name: "idade zero", update: Update{Nickname: "Ana", Age: 0, Timezone: "UTC", AvatarType: AvatarDefault}, wantErr: true},
+		{name: "idade negativa", update: Update{Nickname: "Ana", Age: -1, Timezone: "UTC", AvatarType: AvatarDefault}, wantErr: true},
+		{name: "timezone inválido", update: Update{Nickname: "Ana", Age: 16, Timezone: "Sao_Paulo", AvatarType: AvatarDefault}, wantErr: true},
+		{name: "avatar inválido", update: Update{Nickname: "Ana", Age: 16, Timezone: "UTC", AvatarType: "photo"}, wantErr: true},
 	}
 
 	for _, test := range tests {

@@ -25,10 +25,12 @@ func (r *FirestoreRepository) Ensure(ctx context.Context, candidate Profile) (Pr
 	err := r.client.RunTransaction(ctx, func(ctx context.Context, transaction *firestore.Transaction) error {
 		snapshot, err := transaction.Get(document)
 		exists := err == nil
+		var legacyUpdates []firestore.Update
 		if err == nil {
 			if err := snapshot.DataTo(&result); err != nil {
 				return fmt.Errorf("decodificar perfil: %w", err)
 			}
+			legacyUpdates = applyLegacyDefaults(&result, snapshot.Data())
 		} else if status.Code(err) == codes.NotFound {
 			result = candidate
 		} else {
@@ -40,12 +42,32 @@ func (r *FirestoreRepository) Ensure(ctx context.Context, candidate Profile) (Pr
 		if !exists {
 			return transaction.Create(document, candidate)
 		}
+		if len(legacyUpdates) > 0 {
+			return transaction.Update(document, legacyUpdates)
+		}
 		return nil
 	})
 	if err != nil {
 		return Profile{}, fmt.Errorf("garantir perfil: %w", err)
 	}
 	return result, nil
+}
+
+func applyLegacyDefaults(value *Profile, data map[string]interface{}) []firestore.Update {
+	updates := make([]firestore.Update, 0, 3)
+	if _, exists := data["avatarType"]; !exists {
+		value.AvatarType = AvatarDefault
+		updates = append(updates, firestore.Update{Path: "avatarType", Value: AvatarDefault})
+	}
+	if _, exists := data["reminderNotificationEnabled"]; !exists {
+		value.ReminderNotificationEnabled = true
+		updates = append(updates, firestore.Update{Path: "reminderNotificationEnabled", Value: true})
+	}
+	if _, exists := data["reminderEmailEnabled"]; !exists {
+		value.ReminderEmailEnabled = true
+		updates = append(updates, firestore.Update{Path: "reminderEmailEnabled", Value: true})
+	}
+	return updates
 }
 
 func (r *FirestoreRepository) Get(ctx context.Context, uid string) (Profile, error) {
@@ -82,8 +104,11 @@ func (r *FirestoreRepository) Update(ctx context.Context, uid string, update Upd
 		result.WeightHundredths = update.WeightHundredths
 		result.HeightHundredths = update.HeightHundredths
 		result.Gender = update.Gender
+		result.AvatarType = update.AvatarType
 		result.Timezone = update.Timezone
 		result.RankingOptIn = update.RankingOptIn
+		result.ReminderNotificationEnabled = update.ReminderNotificationEnabled
+		result.ReminderEmailEnabled = update.ReminderEmailEnabled
 		result.ProfileComplete = true
 		result.UpdatedAt = updatedAt
 		if err := ranking.ReconcileTransaction(tx, r.client, rankingInput(result)); err != nil {
@@ -130,6 +155,7 @@ func (r *FirestoreRepository) UpdateDemographics(ctx context.Context, uid string
 func rankingInput(value Profile) ranking.ProjectionInput {
 	return ranking.ProjectionInput{
 		UID: value.UID, Nickname: value.Nickname, RankingOptIn: value.RankingOptIn, ProfileComplete: value.ProfileComplete,
+		AvatarType:  value.AvatarType,
 		TotalPoints: value.TotalPoints, TotalPointsReachedAt: value.TotalPointsReachedAt, CreatedAt: value.CreatedAt, UpdatedAt: value.UpdatedAt,
 	}
 }
