@@ -3,17 +3,22 @@ package httpserver
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"log/slog"
 	"math/big"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"habitos/internal/accountdeletion"
@@ -48,6 +53,8 @@ type Config struct {
 	FirebaseWeb       FirebaseWebConfig
 	VAPIDPublicKey    string
 	ReminderProcessor bool
+	Production        bool
+	WriteTimeout      time.Duration
 }
 
 type Dependencies struct {
@@ -132,6 +139,8 @@ type handler struct {
 	firebaseWeb       FirebaseWebConfig
 	vapidPublicKey    string
 	reminderProcessor bool
+	production        bool
+	limiters          *limiterRegistry
 }
 
 func New(config Config, dependencies Dependencies) (*http.Server, error) {
@@ -140,6 +149,9 @@ func New(config Config, dependencies Dependencies) (*http.Server, error) {
 	}
 	if config.Logger == nil {
 		config.Logger = slog.Default()
+	}
+	if config.WriteTimeout <= 0 {
+		config.WriteTimeout = 30 * time.Second
 	}
 
 	appHandler, err := NewHandler(config, dependencies)
@@ -152,7 +164,7 @@ func New(config Config, dependencies Dependencies) (*http.Server, error) {
 		Handler:           appHandler,
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
-		WriteTimeout:      30 * time.Second,
+		WriteTimeout:      config.WriteTimeout,
 		IdleTimeout:       60 * time.Second,
 	}, nil
 }
@@ -165,7 +177,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking, sugestões e avatares são obrigatórias")
 	}
 
-	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
+	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "inversePercent": func(value progress.Rate) int { return 100 - ratePercent(value) }, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("carregar templates: %w", err)
 	}
@@ -196,6 +208,8 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		firebaseWeb:       config.FirebaseWeb,
 		vapidPublicKey:    config.VAPIDPublicKey,
 		reminderProcessor: config.ReminderProcessor,
+		production:        config.Production,
+		limiters:          newLimiterRegistry(),
 	}
 
 	mux := http.NewServeMux()
@@ -205,25 +219,25 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("GET /static/", http.StripPrefix("/static/", http.FileServerFS(staticFS)))
 	mux.HandleFunc("GET /api/firebase-config", h.firebaseConfig)
 	mux.HandleFunc("GET /api/auth/csrf", h.issueCSRF)
-	mux.Handle("POST /api/auth/session", h.csrf.Protect(http.HandlerFunc(h.createSession)))
+	mux.Handle("POST /api/auth/session", h.rateLimit("session", 10, time.Minute, h.csrf.Protect(http.HandlerFunc(h.createSession))))
 	mux.Handle("POST /api/auth/logout", h.csrf.Protect(http.HandlerFunc(h.logout)))
-	mux.Handle("POST /api/account/deletion/start", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.startAccountDeletion))))
-	mux.Handle("POST /api/account/deletion/continue", h.auth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.continueAccountDeletion))))
+	mux.Handle("POST /api/account/deletion/start", h.auth.RequireAPI(h.rateLimit("account-deletion-start", 5, time.Minute, h.csrf.Protect(http.HandlerFunc(h.startAccountDeletion)))))
+	mux.Handle("POST /api/account/deletion/continue", h.auth.RequireAPI(h.rateLimit("account-deletion-continue", 60, time.Minute, h.csrf.Protect(http.HandlerFunc(h.continueAccountDeletion)))))
 	mux.Handle("POST /api/profile/ensure", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.ensureProfile))))
 	mux.Handle("PUT /api/profile", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateProfile))))
-	mux.Handle("POST /api/profile/photo", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.uploadProfilePhoto))))
+	mux.Handle("POST /api/profile/photo", h.activeAuth.RequireAPI(h.rateLimit("photo", 6, time.Minute, h.csrf.Protect(http.HandlerFunc(h.uploadProfilePhoto)))))
 	mux.Handle("DELETE /api/profile/photo", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.removeProfilePhoto))))
 	mux.Handle("PUT /api/profile/avatar/internal", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.selectInternalAvatar))))
 	mux.Handle("GET /media/avatars/{id}", h.activeAuth.RequireAPI(http.HandlerFunc(h.profilePhoto)))
 	mux.Handle("POST /api/habits", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createHabit))))
-	mux.Handle("POST /api/habit-suggestions", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.suggestHabit))))
+	mux.Handle("POST /api/habit-suggestions", h.activeAuth.RequireAPI(h.rateLimit("ai-suggestion", 10, time.Minute, h.csrf.Protect(http.HandlerFunc(h.suggestHabit)))))
 	mux.Handle("PUT /api/habits/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.updateHabit))))
 	mux.Handle("POST /api/habits/{id}/duplicate", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.duplicateHabit))))
 	mux.Handle("POST /api/habits/{id}/archive", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
 	mux.Handle("POST /api/habits/{id}/reactivate", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.reactivateHabit))))
 	mux.Handle("DELETE /api/habits/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteHabit))))
 	mux.Handle("GET /api/reminders/subscriptions", h.activeAuth.RequireAPI(http.HandlerFunc(h.listPushSubscriptions)))
-	mux.Handle("POST /api/reminders/subscriptions", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.registerPushSubscription))))
+	mux.Handle("POST /api/reminders/subscriptions", h.activeAuth.RequireAPI(h.rateLimit("push-subscription", 20, time.Minute, h.csrf.Protect(http.HandlerFunc(h.registerPushSubscription)))))
 	mux.Handle("DELETE /api/reminders/subscriptions/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.disablePushSubscription))))
 	if h.reminderProcessor {
 		mux.HandleFunc("POST /internal/reminders/process", h.processReminders)
@@ -249,7 +263,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("GET /recompensas", h.activeAuth.RequirePage(http.HandlerFunc(h.rewardsPage)))
 	mux.HandleFunc("GET /aprenda-4rs", h.learnFourRsPage)
 
-	return securityHeaders(requestLogger(config.Logger, mux), config.FirebaseWeb.AuthEmulatorURL != ""), nil
+	return requestContext(requestLogger(config.Logger, securityHeaders(mux, config.FirebaseWeb.AuthEmulatorURL != "", config.Production))), nil
 }
 
 func (h *handler) home(w http.ResponseWriter, _ *http.Request) {
@@ -588,7 +602,7 @@ func (h *handler) createSession(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		IDToken string `json:"idToken"`
 	}
-	if err := decodeJSON(r, &input); err != nil || input.IDToken == "" {
+	if err := decodeJSON(w, r, &input); err != nil || input.IDToken == "" {
 		http.Error(w, "Dados de autenticação inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -634,7 +648,7 @@ func (h *handler) startAccountDeletion(w http.ResponseWriter, r *http.Request) {
 		Confirmation string `json:"confirmation"`
 		IDToken      string `json:"idToken"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Confirmação inválida.", http.StatusBadRequest)
 		return
 	}
@@ -680,7 +694,7 @@ func (h *handler) ensureProfile(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Timezone string `json:"timezone"`
 	}
-	if err := decodeJSON(r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		http.Error(w, "Dados de perfil inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -711,7 +725,7 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		ReminderNotificationEnabled *bool  `json:"reminderNotificationEnabled"`
 		ReminderEmailEnabled        *bool  `json:"reminderEmailEnabled"`
 	}
-	if err := decodeJSON(r, &input); err != nil {
+	if err := decodeJSON(w, r, &input); err != nil {
 		http.Error(w, "Dados de perfil inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -807,7 +821,7 @@ func (h *handler) selectInternalAvatar(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		AvatarType string `json:"avatarType"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Avatar inválido.", http.StatusBadRequest)
 		return
 	}
@@ -885,7 +899,7 @@ func (h *handler) createHabit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request habitRequest
-	if decodeJSON(r, &request) != nil {
+	if decodeJSON(w, r, &request) != nil {
 		http.Error(w, "Dados do hábito inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -916,7 +930,7 @@ func (h *handler) createHabit(w http.ResponseWriter, r *http.Request) {
 func (h *handler) suggestHabit(w http.ResponseWriter, r *http.Request) {
 	identity, _ := auth.IdentityFromContext(r.Context())
 	var request habitsuggestion.Request
-	if decodeJSON(r, &request) != nil {
+	if decodeJSON(w, r, &request) != nil {
 		http.Error(w, "Dados para sugestão inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -939,7 +953,7 @@ func (h *handler) updateHabit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request habitRequest
-	if decodeJSON(r, &request) != nil {
+	if decodeJSON(w, r, &request) != nil {
 		http.Error(w, "Dados do hábito inválidos.", http.StatusBadRequest)
 		return
 	}
@@ -1078,7 +1092,7 @@ func (h *handler) registerPushSubscription(w http.ResponseWriter, r *http.Reques
 			Auth   string `json:"auth"`
 		} `json:"keys"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Subscription inválida.", http.StatusBadRequest)
 		return
 	}
@@ -1125,7 +1139,7 @@ func (h *handler) recordSimple(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Completed bool `json:"completed"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Resultado inválido.", http.StatusBadRequest)
 		return
 	}
@@ -1141,7 +1155,7 @@ func (h *handler) recordQuantitative(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Achieved string `json:"achieved"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Resultado inválido.", http.StatusBadRequest)
 		return
 	}
@@ -1163,7 +1177,7 @@ func (h *handler) createNote(w http.ResponseWriter, r *http.Request) {
 		ExecutionID string `json:"executionId"`
 		Content     string `json:"content"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Nota inválida.", http.StatusBadRequest)
 		return
 	}
@@ -1179,7 +1193,7 @@ func (h *handler) updateNote(w http.ResponseWriter, r *http.Request) {
 	var input struct {
 		Content string `json:"content"`
 	}
-	if decodeJSON(r, &input) != nil {
+	if decodeJSON(w, r, &input) != nil {
 		http.Error(w, "Nota inválida.", http.StatusBadRequest)
 		return
 	}
@@ -1352,11 +1366,21 @@ func (h *handler) render(w http.ResponseWriter, status int, name string, data pa
 	_, _ = output.WriteTo(w)
 }
 
-func decodeJSON(r *http.Request, destination any) error {
-	r.Body = http.MaxBytesReader(nil, r.Body, 1<<20)
+func decodeJSON(w http.ResponseWriter, r *http.Request, destination any) error {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20)
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	return decoder.Decode(destination)
+	if err := decoder.Decode(destination); err != nil {
+		return err
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); !errors.Is(err, io.EOF) {
+		if err == nil {
+			return errors.New("conteúdo JSON adicional")
+		}
+		return err
+	}
+	return nil
 }
 
 func writeJSON(w http.ResponseWriter, status int, value any) {
@@ -1365,24 +1389,151 @@ func writeJSON(w http.ResponseWriter, status int, value any) {
 	_ = json.NewEncoder(w).Encode(value)
 }
 
-func securityHeaders(next http.Handler, allowLocalEmulator bool) http.Handler {
+func securityHeaders(next http.Handler, allowLocalEmulator, production bool) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		connectSources := "'self' https://identitytoolkit.googleapis.com https://securetoken.googleapis.com"
 		if allowLocalEmulator {
 			connectSources += " http://127.0.0.1:* http://localhost:*"
 		}
-		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' https://www.gstatic.com; connect-src "+connectSources+"; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Content-Security-Policy", "default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self' https://www.gstatic.com; connect-src "+connectSources+"; worker-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'")
+		w.Header().Set("Permissions-Policy", "camera=(), geolocation=(), microphone=(), payment=(), usb=()")
 		w.Header().Set("Referrer-Policy", "strict-origin-when-cross-origin")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
 		w.Header().Set("X-Frame-Options", "DENY")
+		if production {
+			w.Header().Set("Strict-Transport-Security", "max-age=31536000")
+		}
+		if privateResponse(r.URL.Path) {
+			w.Header().Set("Cache-Control", "no-store")
+		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+func privateResponse(path string) bool {
+	if strings.HasPrefix(path, "/api/") || strings.HasPrefix(path, "/media/") || strings.HasPrefix(path, "/internal/") {
+		return true
+	}
+	switch path {
+	case "/perfil", "/alterar-senha", "/exclusao-conta", "/criar-habito", "/meus-habitos", "/progresso", "/recompensas":
+		return true
+	}
+	return strings.HasPrefix(path, "/habitos/")
+}
+
+type statusWriter struct {
+	http.ResponseWriter
+	status int
+}
+
+func (w *statusWriter) WriteHeader(status int) {
+	if w.status != 0 {
+		return
+	}
+	w.status = status
+	w.ResponseWriter.WriteHeader(status)
+}
+
+func (w *statusWriter) Write(value []byte) (int, error) {
+	if w.status == 0 {
+		w.status = http.StatusOK
+	}
+	return w.ResponseWriter.Write(value)
 }
 
 func requestLogger(logger *slog.Logger, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		started := time.Now()
-		next.ServeHTTP(w, r)
-		logger.Info("requisição HTTP", "method", r.Method, "path", r.URL.Path, "duration_ms", time.Since(started).Milliseconds())
+		wrapped := &statusWriter{ResponseWriter: w}
+		next.ServeHTTP(wrapped, r)
+		status := wrapped.status
+		if status == 0 {
+			status = http.StatusOK
+		}
+		logger.Info("requisição HTTP", "request_id", requestIDFromContext(r.Context()), "method", r.Method, "path", r.URL.Path, "status", status, "duration_ms", time.Since(started).Milliseconds())
 	})
+}
+
+type requestIDKey struct{}
+
+func requestContext(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var raw [16]byte
+		if _, err := rand.Read(raw[:]); err != nil {
+			raw = [16]byte{}
+		}
+		requestID := hex.EncodeToString(raw[:])
+		w.Header().Set("X-Request-ID", requestID)
+		next.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), requestIDKey{}, requestID)))
+	})
+}
+
+func requestIDFromContext(ctx context.Context) string {
+	value, _ := ctx.Value(requestIDKey{}).(string)
+	return value
+}
+
+type limiterWindow struct {
+	expires time.Time
+	count   int
+}
+
+type limiterRegistry struct {
+	mu      sync.Mutex
+	windows map[string]limiterWindow
+	checks  uint64
+}
+
+func newLimiterRegistry() *limiterRegistry {
+	return &limiterRegistry{windows: make(map[string]limiterWindow)}
+}
+
+func (l *limiterRegistry) allow(key string, limit int, window time.Duration, now time.Time) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.checks++
+	if l.checks%256 == 0 {
+		for existingKey, existing := range l.windows {
+			if !now.Before(existing.expires) {
+				delete(l.windows, existingKey)
+			}
+		}
+	}
+	value := l.windows[key]
+	if value.expires.IsZero() || !now.Before(value.expires) {
+		value = limiterWindow{expires: now.Add(window)}
+	}
+	if value.count >= limit {
+		return false
+	}
+	value.count++
+	l.windows[key] = value
+	return true
+}
+
+func (h *handler) rateLimit(scope string, limit int, window time.Duration, next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		key := clientKey(r)
+		if identity, ok := auth.IdentityFromContext(r.Context()); ok && identity.UID != "" {
+			key = identity.UID
+		}
+		if !h.limiters.allow(scope+":"+key, limit, window, time.Now()) {
+			w.Header().Set("Retry-After", strconv.Itoa(int(window.Seconds())))
+			http.Error(w, "Muitas tentativas. Aguarde e tente novamente.", http.StatusTooManyRequests)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func clientKey(r *http.Request) string {
+	if cookie, err := r.Cookie(csrf.CookieName); err == nil && cookie.Value != "" {
+		sum := sha256.Sum256([]byte(cookie.Value))
+		return "csrf-" + hex.EncodeToString(sum[:8])
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err == nil && host != "" {
+		return host
+	}
+	return r.RemoteAddr
 }

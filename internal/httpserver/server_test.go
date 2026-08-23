@@ -774,6 +774,157 @@ func TestHealth(t *testing.T) {
 	}
 }
 
+func TestDecodeJSONRejectsUnknownTrailingMalformedAndOversizedBodies(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"campo desconhecido", `{"value":"ok","extra":true}`},
+		{"segundo objeto", `{"value":"ok"}{"value":"outro"}`},
+		{"conteúdo adicional", `{"value":"ok"} lixo`},
+		{"malformado", `{"value":`},
+		{"vazio", ``},
+		{"excesso", `{"value":"` + strings.Repeat("x", (1<<20)+1) + `"}`},
+	}
+	for _, item := range tests {
+		t.Run(item.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(item.body))
+			recorder := httptest.NewRecorder()
+			var destination struct {
+				Value string `json:"value"`
+			}
+			if err := decodeJSON(recorder, request, &destination); err == nil {
+				t.Fatal("JSON não confiável deveria ser rejeitado")
+			}
+		})
+	}
+
+	request := httptest.NewRequest(http.MethodPost, "/", strings.NewReader(" \n"+`{"value":"ok"}`+"\n\t"))
+	recorder := httptest.NewRecorder()
+	var destination struct {
+		Value string `json:"value"`
+	}
+	if err := decodeJSON(recorder, request, &destination); err != nil || destination.Value != "ok" {
+		t.Fatalf("JSON válido = %#v, erro=%v", destination, err)
+	}
+}
+
+func TestSecurityHeadersAndPrivateCache(t *testing.T) {
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) })
+	production := requestContext(securityHeaders(next, false, true))
+	request := httptest.NewRequest(http.MethodGet, "/perfil", nil)
+	recorder := httptest.NewRecorder()
+	production.ServeHTTP(recorder, request)
+
+	for name := range map[string]bool{
+		"Content-Security-Policy":   true,
+		"Permissions-Policy":        true,
+		"Strict-Transport-Security": true,
+		"X-Content-Type-Options":    true,
+		"X-Request-ID":              true,
+	} {
+		if recorder.Header().Get(name) == "" {
+			t.Errorf("header %s ausente", name)
+		}
+	}
+	if !strings.Contains(recorder.Header().Get("Content-Security-Policy"), "worker-src 'self'") || strings.Contains(recorder.Header().Get("Content-Security-Policy"), "unsafe-inline") {
+		t.Fatalf("CSP inesperada: %s", recorder.Header().Get("Content-Security-Policy"))
+	}
+	if recorder.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("cache privado = %q", recorder.Header().Get("Cache-Control"))
+	}
+
+	development := securityHeaders(next, false, false)
+	developmentRecorder := httptest.NewRecorder()
+	development.ServeHTTP(developmentRecorder, httptest.NewRequest(http.MethodGet, "/", nil))
+	if developmentRecorder.Header().Get("Strict-Transport-Security") != "" {
+		t.Fatal("HSTS não deve ser emitido em desenvolvimento")
+	}
+
+	staticRecorder := httptest.NewRecorder()
+	production.ServeHTTP(staticRecorder, httptest.NewRequest(http.MethodGet, "/static/css/app.css", nil))
+	if staticRecorder.Header().Get("Cache-Control") == "no-store" {
+		t.Fatal("asset estático não deve receber no-store")
+	}
+}
+
+func TestRateLimiterIsScopedAndBoundedPerInstance(t *testing.T) {
+	registry := newLimiterRegistry()
+	now := time.Now()
+	if !registry.allow("session:client", 2, time.Minute, now) || !registry.allow("session:client", 2, time.Minute, now) {
+		t.Fatal("tentativas dentro do limite deveriam ser aceitas")
+	}
+	if registry.allow("session:client", 2, time.Minute, now) {
+		t.Fatal("tentativa acima do limite deveria ser rejeitada")
+	}
+	if !registry.allow("session:other", 2, time.Minute, now) || !registry.allow("session:client", 2, time.Minute, now.Add(time.Minute)) {
+		t.Fatal("escopo independente ou nova janela deveria ser aceita")
+	}
+}
+
+func TestAnonymousRateLimitKeyIgnoresForwardedHeaders(t *testing.T) {
+	first := httptest.NewRequest(http.MethodPost, "/api/auth/session", nil)
+	first.RemoteAddr = "192.0.2.10:1234"
+	first.Header.Set("X-Forwarded-For", "198.51.100.1")
+	second := httptest.NewRequest(http.MethodPost, "/api/auth/session", nil)
+	second.RemoteAddr = "192.0.2.10:5678"
+	second.Header.Set("X-Forwarded-For", "203.0.113.9")
+	if clientKey(first) != clientKey(second) || clientKey(first) != "192.0.2.10" {
+		t.Fatalf("a origem deve usar RemoteAddr, não X-Forwarded-For: %q e %q", clientKey(first), clientKey(second))
+	}
+
+	first.AddCookie(&http.Cookie{Name: csrf.CookieName, Value: "csrf-um"})
+	second.AddCookie(&http.Cookie{Name: csrf.CookieName, Value: "csrf-dois"})
+	if clientKey(first) == clientKey(second) || !strings.HasPrefix(clientKey(first), "csrf-") {
+		t.Fatal("cookies CSRF distintos devem produzir chaves anônimas distintas e opacas")
+	}
+}
+
+func TestRequestIDIsInternalAndRejectsExternalInfluence(t *testing.T) {
+	var captured string
+	handler := requestContext(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		captured = requestIDFromContext(r.Context())
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := httptest.NewRequest(http.MethodGet, "/", nil)
+	request.Header.Set("X-Request-ID", strings.Repeat("externo", 100))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	responseID := recorder.Header().Get("X-Request-ID")
+	if responseID == request.Header.Get("X-Request-ID") || responseID != captured || len(responseID) != 32 {
+		t.Fatalf("request ID interno inválido: resposta=%q contexto=%q", responseID, captured)
+	}
+	for _, character := range responseID {
+		if !strings.ContainsRune("0123456789abcdef", character) {
+			t.Fatalf("request ID contém caractere inválido: %q", responseID)
+		}
+	}
+}
+
+func TestRequestLogIsStructuredAndOmitsQueryAndBody(t *testing.T) {
+	var output bytes.Buffer
+	logger := slog.New(slog.NewJSONHandler(&output, nil))
+	handler := requestContext(requestLogger(logger, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "segredo-no-corpo", http.StatusTeapot)
+	})))
+	request := httptest.NewRequest(http.MethodPost, "/api/teste?email=privado@example.test", strings.NewReader("nota-privada"))
+	recorder := httptest.NewRecorder()
+	handler.ServeHTTP(recorder, request)
+
+	logLine := output.String()
+	for _, expected := range []string{`"request_id":`, `"method":"POST"`, `"path":"/api/teste"`, `"status":418`} {
+		if !strings.Contains(logLine, expected) {
+			t.Errorf("log não contém %s: %s", expected, logLine)
+		}
+	}
+	for _, forbidden := range []string{"privado@example.test", "nota-privada", "segredo-no-corpo"} {
+		if strings.Contains(logLine, forbidden) {
+			t.Errorf("log expôs conteúdo proibido %q", forbidden)
+		}
+	}
+}
+
 func TestPublicRoutes(t *testing.T) {
 	app := newTestApp(t)
 	routes := []string{"/", "/entrar", "/cadastro", "/recuperar-senha", "/aprenda-4rs"}
@@ -1328,6 +1479,9 @@ func TestStaticAssetAndServiceWorker(t *testing.T) {
 			app.handler.ServeHTTP(recorder, httptest.NewRequest(http.MethodGet, path, nil))
 			if recorder.Code != http.StatusOK {
 				t.Fatalf("status = %d", recorder.Code)
+			}
+			if recorder.Header().Get("Cache-Control") == "no-store" {
+				t.Fatal("asset público recebeu política de cache privado")
 			}
 		})
 	}

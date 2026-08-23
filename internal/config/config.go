@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"net/url"
 	"os"
 	"strconv"
 	"time"
@@ -35,6 +36,7 @@ type Config struct {
 	EmailFrom             string
 	EmailRequestTimeout   time.Duration
 	ReminderProcessor     bool
+	HTTPWriteTimeout      time.Duration
 }
 
 func Load() (Config, error) {
@@ -77,6 +79,15 @@ func Load() (Config, error) {
 		}
 		config.ReminderProcessor = parsed
 	}
+	defaultWriteTimeout := "30s"
+	if config.ReminderProcessor {
+		defaultWriteTimeout = "10m"
+	}
+	writeTimeout, err := time.ParseDuration(envOrDefault("HTTP_WRITE_TIMEOUT", defaultWriteTimeout))
+	if err != nil || writeTimeout <= 0 {
+		return Config{}, fmt.Errorf("HTTP_WRITE_TIMEOUT deve ser uma duração positiva")
+	}
+	config.HTTPWriteTimeout = writeTimeout
 
 	if value := os.Getenv("SESSION_COOKIE_SECURE"); value != "" {
 		switch value {
@@ -116,6 +127,13 @@ func Load() (Config, error) {
 		return Config{}, fmt.Errorf("SESSION_COOKIE_SECURE não pode ser false em produção")
 	}
 	if environment == "production" {
+		if authEmulatorHost != "" || firestoreEmulatorHost != "" || storageEmulatorHost != "" {
+			return Config{}, fmt.Errorf("emuladores Firebase não são permitidos em produção")
+		}
+		baseURL, err := url.Parse(config.AppBaseURL)
+		if err != nil || baseURL.Scheme != "https" || baseURL.Host == "" || baseURL.User != nil || (baseURL.Path != "" && baseURL.Path != "/") || baseURL.RawQuery != "" || baseURL.Fragment != "" {
+			return Config{}, fmt.Errorf("APP_BASE_URL deve ser uma URL HTTPS válida em produção")
+		}
 		for name, value := range map[string]string{"APP_BASE_URL": config.AppBaseURL, "VAPID_PUBLIC_KEY": config.VAPIDPublicKey} {
 			if value == "" {
 				return Config{}, fmt.Errorf("%s é obrigatório em produção", name)

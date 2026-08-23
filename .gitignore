@@ -20,3 +20,8 @@ coverage.out
 firebase-debug.log
 firestore-debug.log
 ui-debug.log
+
+# Aceite E2E local
+node_modules/
+test-results/
+playwright-report/

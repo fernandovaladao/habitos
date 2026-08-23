@@ -31,7 +31,7 @@ O projeto contém a fundação do monólito modular, autenticação e perfil, ge
 
 ## Requisitos locais
 
-- Go 1.25 ou superior.
+- Go 1.26.6 ou superior, incluindo as correções de segurança da biblioteca padrão exigidas pelo aceite.
 - Docker, opcional, para validar a imagem de produção.
 - Um projeto Firebase com autenticação por e-mail/senha e Firestore, ou Firebase Emulator Suite.
 - Node.js e Firebase CLI para executar o Emulator Suite.
@@ -75,10 +75,13 @@ Configuração dos lembretes reais:
 - `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `VAPID_SUBSCRIBER` para Web Push;
 - `RESEND_API_KEY`, `EMAIL_FROM` e `EMAIL_REQUEST_TIMEOUT` para E-mail;
 - `REMINDER_PROCESSOR_ENABLED=true` somente na implantação privada invocada pelo Cloud Scheduler ou no desenvolvimento local.
+- `HTTP_WRITE_TIMEOUT`: opcional; padrão `30s` no serviço web e `10m` no processador privado.
 
 `EMAIL_FROM` precisa pertencer a um domínio verificado no Resend antes do smoke test de produção. A implantação privada do mesmo binário deve exigir autenticação IAM do Cloud Run. A service account dedicada do Cloud Scheduler recebe somente `roles/run.invoker`; a implantação pública mantém `REMINDER_PROCESSOR_ENABLED=false`, portanto não registra a rota interna. O Scheduler chama a implantação privada a cada minuto com OIDC. Não há validação JWT artesanal na aplicação porque a autenticação é realizada pelo Cloud Run.
 
 No ambiente local com projeto `demo-habitos-local` e Emulators, a rota pode ser habilitada para processamento manual. Fakes automatizados não enviam Push ou E-mail reais.
+
+Em produção, qualquer variável de Emulator causa falha de inicialização e `APP_BASE_URL` deve ser HTTPS. O mesmo container é usado em dois papéis: web público com `REMINDER_PROCESSOR_ENABLED=false` e processador privado com `REMINDER_PROCESSOR_ENABLED=true`, protegido por IAM. Consulte `docs/PRODUCTION_ACCEPTANCE.md`.
 
 A integração usa a OpenAI Responses API com Structured Outputs. Somente título e descrição são enviados pelo backend; a aplicação não persiste nem registra prompts, respostas ou sugestões. Nunca exponha `OPENAI_API_KEY` no frontend ou no repositório. Os testes usam fakes e não chamam a API real.
 
@@ -214,6 +217,8 @@ Rotas da gestão de hábitos:
 ```bash
 go test ./...
 ```
+
+O aceite pré-produção inclui detector de concorrência, `go vet`, `govulncheck`, busca de segredos, Emulators e Playwright/axe. Consulte `docs/PRODUCTION_ACCEPTANCE.md`. O rate limiting das bordas sensíveis é uma defesa em memória por instância; não representa quota global distribuída.
 
 ## Docker
 

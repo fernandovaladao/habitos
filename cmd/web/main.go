@@ -70,6 +70,8 @@ func main() {
 		},
 		VAPIDPublicKey:    appConfig.VAPIDPublicKey,
 		ReminderProcessor: appConfig.ReminderProcessor,
+		Production:        appConfig.Environment == "production",
+		WriteTimeout:      appConfig.HTTPWriteTimeout,
 	}, httpserver.Dependencies{
 		Sessions:     sessions,
 		Profiles:     profiles,

@@ -352,7 +352,8 @@ p { color: var(--muted); font-size: 1.05rem; }
 .evolution-chart { display: flex; align-items: end; gap: 12px; min-height: 260px; padding: 24px; overflow-x: auto; }
 .evolution-column { display: flex; flex: 1 0 54px; flex-direction: column; align-items: center; justify-content: end; height: 210px; gap: 6px; }
 .evolution-value { min-height: 20px; color: var(--muted); font-size: .8rem; }
-.evolution-bar { display: block; width: min(34px, 70%); min-height: 3px; max-height: 150px; background: var(--blue-700); border-radius: 8px 8px 2px 2px; }
+.evolution-bar { display: block; width: min(34px, 70%); height: 150px; min-height: 3px; max-height: 150px; border-radius: 8px 8px 2px 2px; }
+.evolution-bar rect { fill: var(--blue-700); }
 .evolution-bar--future, .evolution-bar--empty { height: 3px; background: var(--border); }
 .distribution-list { display: grid; gap: 14px; padding: 24px; }
 .distribution-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) 3fr 52px; align-items: center; gap: 14px; }

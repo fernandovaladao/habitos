@@ -26,7 +26,7 @@ func resetConfigEnvironment(t *testing.T) {
 		"OPENAI_MODEL",
 		"AI_REQUEST_TIMEOUT",
 		"APP_BASE_URL", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBSCRIBER",
-		"RESEND_API_KEY", "EMAIL_FROM", "EMAIL_REQUEST_TIMEOUT", "REMINDER_PROCESSOR_ENABLED",
+		"RESEND_API_KEY", "EMAIL_FROM", "EMAIL_REQUEST_TIMEOUT", "REMINDER_PROCESSOR_ENABLED", "HTTP_WRITE_TIMEOUT",
 	}
 	for _, name := range variables {
 		t.Setenv(name, "")
@@ -89,6 +89,56 @@ func TestLoadRejectsInsecureCookieInProduction(t *testing.T) {
 
 	if _, err := Load(); err == nil {
 		t.Fatal("Load() deveria rejeitar cookie inseguro em produção")
+	}
+}
+
+func TestLoadRejectsEmulatorsInProduction(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("SESSION_COOKIE_SECURE", "true")
+	t.Setenv("APP_BASE_URL", "https://habitos.example.test")
+	t.Setenv("VAPID_PUBLIC_KEY", "public")
+	t.Setenv("FIREBASE_AUTH_EMULATOR_HOST", LocalAuthEmulatorHost)
+	t.Setenv("FIRESTORE_EMULATOR_HOST", LocalFirestoreEmulatorHost)
+	t.Setenv("FIREBASE_STORAGE_EMULATOR_HOST", LocalStorageEmulatorHost)
+	if _, err := Load(); err == nil {
+		t.Fatal("produção não deveria aceitar hosts de Emulator")
+	}
+}
+
+func TestLoadRequiresHTTPSBaseURLInProduction(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("SESSION_COOKIE_SECURE", "true")
+	t.Setenv("APP_BASE_URL", "http://habitos.example.test")
+	t.Setenv("VAPID_PUBLIC_KEY", "public")
+	if _, err := Load(); err == nil {
+		t.Fatal("produção não deveria aceitar APP_BASE_URL sem HTTPS")
+	}
+}
+
+func TestLoadUsesRoleSpecificWriteTimeout(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	web, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if web.HTTPWriteTimeout != 30*time.Second {
+		t.Fatalf("timeout web = %v", web.HTTPWriteTimeout)
+	}
+
+	t.Setenv("FIREBASE_PROJECT_ID", LocalEmulatorProjectID)
+	t.Setenv("GCLOUD_PROJECT", LocalEmulatorProjectID)
+	t.Setenv("FIREBASE_AUTH_EMULATOR_HOST", LocalAuthEmulatorHost)
+	t.Setenv("FIRESTORE_EMULATOR_HOST", LocalFirestoreEmulatorHost)
+	t.Setenv("FIREBASE_STORAGE_EMULATOR_HOST", LocalStorageEmulatorHost)
+	t.Setenv("REMINDER_PROCESSOR_ENABLED", "true")
+	processor, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if processor.HTTPWriteTimeout != 10*time.Minute {
+		t.Fatalf("timeout processador = %v", processor.HTTPWriteTimeout)
 	}
 }
 
