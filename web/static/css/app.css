@@ -281,6 +281,9 @@ p { color: var(--muted); font-size: 1.05rem; }
 .note-card { padding: 18px; }
 .note-card div { display: flex; gap: 10px; margin-top: 8px; }
 .note-card button { border: 0; background: transparent; color: var(--blue-700); font: inherit; font-weight: 700; cursor: pointer; }
+.metric-value { color: var(--blue-700); font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; margin: .35rem 0; }
+.metric-value--accent, .achievement-card > span { color: var(--orange-500); }
+.achievement-card > span { font-size: 2rem; }
 
 @media (max-width: 700px) {
   .form-grid, .details-grid { grid-template-columns: 1fr; }

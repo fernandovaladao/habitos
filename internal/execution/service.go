@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"habitos/internal/auth"
+	"habitos/internal/gamification"
 	"habitos/internal/habit"
 )
 
@@ -29,7 +30,7 @@ func (s *Service) SyncHabit(ctx context.Context, identity auth.Identity, value h
 		return err
 	}
 	if value.Status != habit.StatusActive || value.DeletedAt != nil {
-		return nil
+		return s.repository.ReconcileHabit(ctx, identity.UID, value.ID, now)
 	}
 	sort.Slice(versions, func(i, j int) bool { return versions[i].EffectiveDate < versions[j].EffectiveDate })
 	if len(versions) == 0 {
@@ -51,7 +52,7 @@ func (s *Service) SyncHabit(ctx context.Context, identity auth.Identity, value h
 		start = value.OccurrencesResumeDate
 	}
 	if start > throughDate {
-		return nil
+		return s.repository.ReconcileHabit(ctx, identity.UID, value.ID, now)
 	}
 	for date := start; date <= throughDate; {
 		version, ok := versionForDate(versions, date)
@@ -78,7 +79,10 @@ func (s *Service) SyncHabit(ctx context.Context, identity auth.Identity, value h
 		}
 		date = next
 	}
-	return s.repository.AdvanceCursor(ctx, identity.UID, value.ID, throughDate, now)
+	if err := s.repository.AdvanceCursor(ctx, identity.UID, value.ID, throughDate, now); err != nil {
+		return err
+	}
+	return s.repository.ReconcileHabit(ctx, identity.UID, value.ID, now)
 }
 
 func (s *Service) RecordSimple(ctx context.Context, identity auth.Identity, id string, completed bool) (Execution, error) {
@@ -131,6 +135,20 @@ func (s *Service) History(ctx context.Context, identity auth.Identity, habitID, 
 		return nil, auth.ErrInvalidSession
 	}
 	return s.repository.ListByHabit(ctx, identity.UID, habitID, before, 30)
+}
+
+func (s *Service) Streak(ctx context.Context, identity auth.Identity, habitID string) (gamification.Streak, error) {
+	if identity.UID == "" {
+		return gamification.Streak{}, auth.ErrInvalidSession
+	}
+	return s.repository.Streak(ctx, identity.UID, habitID)
+}
+
+func (s *Service) Achievements(ctx context.Context, identity auth.Identity) ([]gamification.UserAchievement, error) {
+	if identity.UID == "" {
+		return nil, auth.ErrInvalidSession
+	}
+	return s.repository.Achievements(ctx, identity.UID)
 }
 
 func versionForDate(versions []habit.ScheduleVersion, date string) (habit.ScheduleVersion, bool) {

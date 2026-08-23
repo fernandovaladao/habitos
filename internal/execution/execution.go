@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"habitos/internal/gamification"
 	"habitos/internal/habit"
 )
 
@@ -39,6 +40,10 @@ type Execution struct {
 	ScheduleSnapshot         habit.Schedule `firestore:"scheduleSnapshot" json:"scheduleSnapshot"`
 	Status                   Status         `firestore:"status" json:"status"`
 	AchievedHundredths       int64          `firestore:"achievedValue" json:"achievedValue"`
+	PointsAwarded            int            `firestore:"pointsAwarded" json:"pointsAwarded"`
+	StreakBefore             int            `firestore:"streakBefore" json:"streakBefore"`
+	StreakAfter              int            `firestore:"streakAfter" json:"streakAfter"`
+	ScoredAt                 *time.Time     `firestore:"scoredAt,omitempty" json:"scoredAt,omitempty"`
 	PerformedAt              *time.Time     `firestore:"performedAt,omitempty" json:"performedAt,omitempty"`
 	ClosedAt                 *time.Time     `firestore:"closedAt,omitempty" json:"closedAt,omitempty"`
 	CreatedAt                time.Time      `firestore:"createdAt" json:"createdAt"`
@@ -54,4 +59,7 @@ type Repository interface {
 	CloseExpired(ctx context.Context, ownerUID, habitID string, now time.Time) error
 	Cursor(ctx context.Context, ownerUID, habitID string) (string, error)
 	AdvanceCursor(ctx context.Context, ownerUID, habitID, date string, now time.Time) error
+	ReconcileHabit(ctx context.Context, ownerUID, habitID string, now time.Time) error
+	Streak(ctx context.Context, ownerUID, habitID string) (gamification.Streak, error)
+	Achievements(ctx context.Context, ownerUID string) ([]gamification.UserAchievement, error)
 }

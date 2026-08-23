@@ -9,6 +9,7 @@ import (
 	"google.golang.org/api/iterator"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"habitos/internal/gamification"
 )
 
 type FirestoreRepository struct{ client *firestore.Client }
@@ -114,8 +115,34 @@ func (r *FirestoreRepository) Update(ctx context.Context, value Habit, version *
 		if persisted.OwnerUID != value.OwnerUID || persisted.DeletedAt != nil {
 			return ErrNotFound
 		}
+		var streakDoc *firestore.DocumentRef
+		var streakValue gamification.Streak
+		resetStreak := value.ReactivatedAt != nil && (persisted.ReactivatedAt == nil || !persisted.ReactivatedAt.Equal(*value.ReactivatedAt))
+		if resetStreak {
+			streakDoc = r.client.Collection("habitStreaks").Doc(value.ID)
+			streakValue = gamification.Streak{HabitID: value.ID, OwnerUID: value.OwnerUID}
+			streakSnapshot, streakErr := tx.Get(streakDoc)
+			if streakErr == nil {
+				if err := streakSnapshot.DataTo(&streakValue); err != nil {
+					return err
+				}
+				if streakValue.OwnerUID != value.OwnerUID {
+					return ErrNotFound
+				}
+			} else if status.Code(streakErr) != codes.NotFound {
+				return streakErr
+			}
+			streakValue.CurrentStreak = 0
+			streakValue.LastScheduledExecutionDate = ""
+			streakValue.UpdatedAt = value.UpdatedAt
+		}
 		if err := tx.Set(doc, value); err != nil {
 			return err
+		}
+		if resetStreak {
+			if err := tx.Set(streakDoc, streakValue); err != nil {
+				return err
+			}
 		}
 		if version != nil {
 			if version.OwnerUID != persisted.OwnerUID || version.HabitID != persisted.ID {

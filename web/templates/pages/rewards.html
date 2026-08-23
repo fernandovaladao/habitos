@@ -1,0 +1,8 @@
+{{define "rewards"}}
+<!doctype html><html lang="pt-BR">{{template "head" .}}<body><header class="site-header">{{template "brand" .}}</header><main class="page-shell">
+<div class="page-heading"><div><p class="eyebrow">Recompensas</p><h1>{{.Profile.TotalPoints}} pontos</h1><p>Execução concluída vale 10 pontos; parcial quantitativo vale até 10 pontos proporcionais.</p></div></div>
+<section class="card"><h2>Bônus de sequência</h2><p>3: +10 · 7: +25 · 15: +50 · 30: +100. Cada bônus é concedido uma vez por hábito.</p></section>
+<section><h2>Conquistas</h2><div class="details-grid">{{range .Achievements}}<article class="card achievement-card"><span aria-hidden="true">★</span><h3>{{.Name}}</h3><p>{{.Description}}</p><small>Desbloqueada em {{.UnlockedAt.Format "02/01/2006"}}</small></article>{{else}}<p>Suas conquistas aparecerão aqui ao atingir sequências.</p>{{end}}</div></section>
+<div class="notice">O ranking geral será disponibilizado em uma próxima fase.</div>
+</main>{{template "navigation" .}}</body></html>
+{{end}}

@@ -16,6 +16,7 @@ import (
 	"habitos/internal/auth"
 	"habitos/internal/csrf"
 	"habitos/internal/execution"
+	"habitos/internal/gamification"
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
@@ -61,6 +62,11 @@ type pageData struct {
 	Notes             []note.Note
 	TodayExecutions   map[string]*execution.Execution
 	NextHistoryBefore string
+	Streak            gamification.Streak
+	Streaks           []gamification.Streak
+	Achievements      []gamification.UserAchievement
+	MaxCurrentStreak  int
+	HabitTitles       map[string]string
 	FirebaseEnabled   bool
 }
 
@@ -167,21 +173,11 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("GET /meus-habitos", h.auth.RequirePage(http.HandlerFunc(h.habitsPage)))
 	mux.Handle("GET /habitos/{id}", h.auth.RequirePage(http.HandlerFunc(h.habitDetailsPage)))
 	mux.Handle("GET /habitos/{id}/editar", h.auth.RequirePage(http.HandlerFunc(h.editHabitPage)))
+	mux.Handle("GET /progresso", h.auth.RequirePage(http.HandlerFunc(h.progressPage)))
+	mux.Handle("GET /recompensas", h.auth.RequirePage(http.HandlerFunc(h.rewardsPage)))
 	mux.HandleFunc("GET /aprenda-4rs", h.publicPlaceholder(pageData{
 		Title: "Aprenda os 4 Rs", Description: "O conteúdo completo sobre os 4 Rs será disponibilizado em uma próxima etapa.", Path: "/aprenda-4rs",
 	}))
-
-	privatePages := []pageData{
-		{Title: "Progresso", Description: "O acompanhamento de progresso será disponibilizado em uma próxima etapa.", Path: "/progresso"},
-		{Title: "Recompensas", Description: "Recompensas e ranking serão disponibilizados em uma próxima etapa.", Path: "/recompensas"},
-	}
-	for _, page := range privatePages {
-		page := page
-		mux.Handle("GET "+page.Path, h.auth.RequirePage(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-			page.Authenticated = true
-			h.render(w, http.StatusOK, "placeholder", page)
-		})))
-	}
 
 	return securityHeaders(requestLogger(config.Logger, mux), config.FirebaseWeb.AuthEmulatorURL != ""), nil
 }
@@ -347,7 +343,69 @@ func (h *handler) habitDetailsPage(w http.ResponseWriter, r *http.Request) {
 	if len(history) == 30 {
 		nextBefore = history[len(history)-1].ScheduledDate
 	}
-	h.render(w, http.StatusOK, "habit-details", pageData{Title: "Detalhes do Hábito", Description: value.Title, Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value, SchedulePending: value.PreviousSchedule != nil && today < value.ScheduleEffectiveDate, Execution: current, Executions: history, Notes: notes, NextHistoryBefore: nextBefore})
+	streak, err := h.executions.Streak(r.Context(), identity, value.ID)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "habit-details", pageData{Title: "Detalhes do Hábito", Description: value.Title, Path: "/meus-habitos", Authenticated: true, Profile: userProfile, Habit: value, SchedulePending: value.PreviousSchedule != nil && today < value.ScheduleEffectiveDate, Execution: current, Executions: history, Notes: notes, NextHistoryBefore: nextBefore, Streak: streak})
+}
+
+func (h *handler) progressData(r *http.Request) (pageData, error) {
+	identity, userProfile, err := h.authenticatedProfile(r)
+	if err != nil {
+		return pageData{}, err
+	}
+	habits, err := h.habits.List(r.Context(), identity, userProfile.Timezone, habit.FilterAll)
+	if err != nil {
+		return pageData{}, err
+	}
+	var streaks []gamification.Streak
+	habitTitles := make(map[string]string, len(habits))
+	maxCurrent := 0
+	for _, value := range habits {
+		habitTitles[value.ID] = value.Title
+		if err := h.syncHabit(r, identity, userProfile, value); err != nil {
+			return pageData{}, err
+		}
+		streak, err := h.executions.Streak(r.Context(), identity, value.ID)
+		if err != nil {
+			return pageData{}, err
+		}
+		streaks = append(streaks, streak)
+		if value.Status == habit.StatusActive && streak.CurrentStreak > maxCurrent {
+			maxCurrent = streak.CurrentStreak
+		}
+	}
+	userProfile, err = h.profiles.Get(r.Context(), identity)
+	if err != nil {
+		return pageData{}, err
+	}
+	achievements, err := h.executions.Achievements(r.Context(), identity)
+	if err != nil {
+		return pageData{}, err
+	}
+	return pageData{Authenticated: true, Profile: userProfile, Habits: habits, Streaks: streaks, Achievements: achievements, MaxCurrentStreak: maxCurrent, HabitTitles: habitTitles}, nil
+}
+
+func (h *handler) progressPage(w http.ResponseWriter, r *http.Request) {
+	data, err := h.progressData(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	data.Title, data.Description, data.Path = "Progresso", "Acompanhe seus pontos e sequências.", "/progresso"
+	h.render(w, http.StatusOK, "progress", data)
+}
+
+func (h *handler) rewardsPage(w http.ResponseWriter, r *http.Request) {
+	data, err := h.progressData(r)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	data.Title, data.Description, data.Path = "Recompensas", "Veja seus bônus e conquistas.", "/recompensas"
+	h.render(w, http.StatusOK, "rewards", data)
 }
 
 func (h *handler) syncHabit(r *http.Request, identity auth.Identity, userProfile profile.Profile, value habit.Habit) error {

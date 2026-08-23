@@ -16,6 +16,7 @@ import (
 	"habitos/internal/auth"
 	"habitos/internal/csrf"
 	"habitos/internal/execution"
+	"habitos/internal/gamification"
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
@@ -180,6 +181,15 @@ func (r *fakeExecutionRepository) Cursor(_ context.Context, uid, hid string) (st
 func (r *fakeExecutionRepository) AdvanceCursor(_ context.Context, uid, hid, date string, _ time.Time) error {
 	r.cursors[uid+hid] = date
 	return nil
+}
+func (r *fakeExecutionRepository) ReconcileHabit(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (r *fakeExecutionRepository) Streak(_ context.Context, uid, hid string) (gamification.Streak, error) {
+	return gamification.Streak{OwnerUID: uid, HabitID: hid}, nil
+}
+func (r *fakeExecutionRepository) Achievements(context.Context, string) ([]gamification.UserAchievement, error) {
+	return nil, nil
 }
 
 type fakeNoteRepository struct {
@@ -476,6 +486,24 @@ func TestPrivateRouteUsesValidatedSession(t *testing.T) {
 	}
 	if _, ok := app.profiles.profiles["firebase-user-b"]; ok {
 		t.Fatal("userId enviado pelo cliente foi usado")
+	}
+}
+
+func TestGamificationPagesRequireSessionAndRenderAuthenticatedData(t *testing.T) {
+	app := newTestApp(t)
+	for _, path := range []string{"/progresso", "/recompensas"} {
+		anonymous := httptest.NewRecorder()
+		app.handler.ServeHTTP(anonymous, httptest.NewRequest(http.MethodGet, path, nil))
+		if anonymous.Code != http.StatusSeeOther {
+			t.Fatalf("%s anônimo status=%d", path, anonymous.Code)
+		}
+		authenticated := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodGet, path, nil)
+		request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+		app.handler.ServeHTTP(authenticated, request)
+		if authenticated.Code != http.StatusOK || !strings.Contains(authenticated.Body.String(), "0") {
+			t.Fatalf("%s autenticado status=%d corpo=%s", path, authenticated.Code, authenticated.Body.String())
+		}
 	}
 }
 

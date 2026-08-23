@@ -1,0 +1,7 @@
+{{define "progress"}}
+<!doctype html><html lang="pt-BR">{{template "head" .}}<body><header class="site-header">{{template "brand" .}}</header><main class="page-shell">
+<div class="page-heading"><div><p class="eyebrow">Progresso</p><h1>Seu progresso</h1><p>Pontos e sequências confirmados pelas suas execuções programadas.</p></div></div>
+<section class="details-grid"><article class="card detail-card"><h2>Pontos</h2><p class="metric-value metric-value--accent">{{.Profile.TotalPoints}}</p></article><article class="card detail-card"><h2>Maior sequência atual</h2><p class="metric-value">{{.MaxCurrentStreak}}</p></article><article class="card detail-card"><h2>Conquistas</h2><p class="metric-value">{{len .Achievements}}</p></article></section>
+<section><h2>Sequências por hábito</h2><div class="details-grid">{{range .Streaks}}<article class="card detail-card"><h3>{{index $.HabitTitles .HabitID}}</h3><p>Atual: <strong>{{.CurrentStreak}}</strong></p><p>Melhor: <strong>{{.BestStreak}}</strong></p></article>{{else}}<p>Crie e execute um hábito para acompanhar sua sequência.</p>{{end}}</div></section>
+</main>{{template "navigation" .}}</body></html>
+{{end}}

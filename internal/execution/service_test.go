@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"habitos/internal/auth"
+	"habitos/internal/gamification"
 	"habitos/internal/habit"
 	"sync"
 	"testing"
@@ -111,6 +112,15 @@ func (r *memoryRepository) AdvanceCursor(_ context.Context, uid, hid, date strin
 	}
 	return nil
 }
+func (r *memoryRepository) ReconcileHabit(context.Context, string, string, time.Time) error {
+	return nil
+}
+func (r *memoryRepository) Streak(_ context.Context, uid, hid string) (gamification.Streak, error) {
+	return gamification.Streak{OwnerUID: uid, HabitID: hid}, nil
+}
+func (r *memoryRepository) Achievements(context.Context, string) ([]gamification.UserAchievement, error) {
+	return nil, nil
+}
 
 var identity = auth.Identity{UID: "u1", Email: "u@test"}
 
@@ -121,6 +131,31 @@ func TestRecordRejectsIdentityWithoutUID(t *testing.T) {
 	}
 	if _, err := s.RecordQuantitative(context.Background(), auth.Identity{}, "x", 1); !errors.Is(err, auth.ErrInvalidSession) {
 		t.Fatalf("RecordQuantitative erro=%v", err)
+	}
+}
+
+func TestExecutionPoints(t *testing.T) {
+	completed, err := pointsFor(Execution{Status: StatusCompleted, GoalTypeSnapshot: habit.GoalSimple})
+	if err != nil || completed != 10 {
+		t.Fatalf("simples concluída=%d erro=%v", completed, err)
+	}
+	notDone, err := pointsFor(Execution{Status: StatusNotDone, GoalTypeSnapshot: habit.GoalSimple})
+	if err != nil || notDone != 0 {
+		t.Fatalf("simples não realizada=%d erro=%v", notDone, err)
+	}
+}
+
+func TestIdenticalLegacyResultRequiresOneReconciliation(t *testing.T) {
+	legacy := Execution{Status: StatusCompleted, AchievedHundredths: 0}
+	if !identicalResultNeedsReconciliation(legacy) {
+		t.Fatal("execução pré-Fase 5 deveria exigir reconciliação")
+	}
+	scoredAt := time.Date(2026, 8, 22, 12, 0, 0, 0, time.UTC)
+	legacy.ScoredAt = &scoredAt
+	legacy.PointsAwarded = 10
+	legacy.StreakAfter = 1
+	if identicalResultNeedsReconciliation(legacy) {
+		t.Fatal("execução reconciliada deveria permitir no-op completo")
 	}
 }
 

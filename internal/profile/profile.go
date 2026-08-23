@@ -11,18 +11,20 @@ import (
 var ErrNotFound = errors.New("perfil não encontrado")
 
 type Profile struct {
-	UID              string    `firestore:"id" json:"uid"`
-	Email            string    `firestore:"email" json:"email"`
-	Nickname         string    `firestore:"nickname" json:"nickname"`
-	Age              int       `firestore:"age" json:"age"`
-	WeightHundredths int64     `firestore:"weightHundredths" json:"weightHundredths"`
-	HeightHundredths int64     `firestore:"heightHundredths" json:"heightHundredths"`
-	Gender           string    `firestore:"gender" json:"gender"`
-	Timezone         string    `firestore:"timezone" json:"timezone"`
-	RankingOptIn     bool      `firestore:"rankingOptIn" json:"rankingOptIn"`
-	ProfileComplete  bool      `firestore:"profileComplete" json:"profileComplete"`
-	CreatedAt        time.Time `firestore:"createdAt" json:"createdAt"`
-	UpdatedAt        time.Time `firestore:"updatedAt" json:"updatedAt"`
+	UID                  string     `firestore:"id" json:"uid"`
+	Email                string     `firestore:"email" json:"email"`
+	Nickname             string     `firestore:"nickname" json:"nickname"`
+	Age                  int        `firestore:"age" json:"age"`
+	WeightHundredths     int64      `firestore:"weightHundredths" json:"weightHundredths"`
+	HeightHundredths     int64      `firestore:"heightHundredths" json:"heightHundredths"`
+	Gender               string     `firestore:"gender" json:"gender"`
+	Timezone             string     `firestore:"timezone" json:"timezone"`
+	RankingOptIn         bool       `firestore:"rankingOptIn" json:"rankingOptIn"`
+	ProfileComplete      bool       `firestore:"profileComplete" json:"profileComplete"`
+	TotalPoints          int64      `firestore:"totalPoints" json:"totalPoints"`
+	TotalPointsReachedAt *time.Time `firestore:"totalPointsReachedAt,omitempty" json:"totalPointsReachedAt,omitempty"`
+	CreatedAt            time.Time  `firestore:"createdAt" json:"createdAt"`
+	UpdatedAt            time.Time  `firestore:"updatedAt" json:"updatedAt"`
 }
 
 type Update struct {

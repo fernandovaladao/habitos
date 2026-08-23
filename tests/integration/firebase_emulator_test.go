@@ -193,6 +193,138 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	if _, err := executions.Get(ctx, auth.Identity{UID: "outro-uid", Email: "outro@test"}, history[0].ID); !errors.Is(err, execution.ErrNotFound) {
 		t.Fatalf("outro usuário leu execução: %v", err)
 	}
+	gamificationHabit, err := habits.Create(ctx, identity, "America/Sao_Paulo", habit.Input{
+		Title: "Sequência local", Description: "Validar gamificação", GoalType: habit.GoalSimple,
+		Schedule: habit.Schedule{Weekdays: []int{1, 2, 3, 4, 5, 6, 7}, Time: "08:00", WeeklyTargetExecutions: 7, Reminder: habit.ReminderNotification},
+	})
+	if err != nil {
+		t.Fatalf("criar hábito de gamificação: %v", err)
+	}
+	deadline := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Microsecond)
+	var streakExecutions []execution.Execution
+	for index := 2; index >= 0; index-- {
+		date := time.Now().In(location).AddDate(0, 0, -index).Format("2006-01-02")
+		candidate := execution.Execution{ID: executionRepository.NewID(), OwnerUID: uid, HabitID: gamificationHabit.ID, ScheduledDate: date, GoalTypeSnapshot: habit.GoalSimple, Status: execution.StatusPending, RegistrationDeadline: deadline, CreatedAt: time.Now().UTC().Truncate(time.Microsecond), UpdatedAt: time.Now().UTC().Truncate(time.Microsecond)}
+		ensured, ensureErr := executionRepository.Ensure(ctx, candidate, fmt.Sprintf("gamification-%s-%s", gamificationHabit.ID, date))
+		if ensureErr != nil {
+			t.Fatalf("materializar sequência: %v", ensureErr)
+		}
+		completed, recordErr := executions.RecordSimple(ctx, identity, ensured.ID, true)
+		if recordErr != nil || completed.PointsAwarded != 10 {
+			t.Fatalf("pontuar execução: %#v erro=%v", completed, recordErr)
+		}
+		streakExecutions = append(streakExecutions, completed)
+	}
+	streakState, err := executions.Streak(ctx, identity, gamificationHabit.ID)
+	if err != nil || streakState.CurrentStreak != 3 || streakState.BestStreak != 3 || len(streakState.MilestonesAwarded) != 1 {
+		t.Fatalf("sequência 3 inválida: %#v erro=%v", streakState, err)
+	}
+	profileAfterBonus, err := profiles.Get(ctx, identity)
+	if err != nil || profileAfterBonus.TotalPoints < 40 {
+		t.Fatalf("total não recebeu pontos e bônus: %#v erro=%v", profileAfterBonus, err)
+	}
+	reachedAt := profileAfterBonus.TotalPointsReachedAt
+	identical, err := executions.RecordSimple(ctx, identity, streakExecutions[2].ID, true)
+	profileAfterIdentical, _ := profiles.Get(ctx, identity)
+	if err != nil || !identical.UpdatedAt.Equal(streakExecutions[2].UpdatedAt) || reachedAt == nil || profileAfterIdentical.TotalPointsReachedAt == nil || !profileAfterIdentical.TotalPointsReachedAt.Equal(*reachedAt) {
+		t.Fatalf("reenvio idêntico não foi no-op: execução=%#v perfil=%#v erro=%v", identical, profileAfterIdentical, err)
+	}
+	if _, err := executions.RecordSimple(ctx, identity, streakExecutions[1].ID, false); err != nil {
+		t.Fatalf("correção retroativa: %v", err)
+	}
+	reducedStreak, _ := executions.Streak(ctx, identity, gamificationHabit.ID)
+	reducedProfile, _ := profiles.Get(ctx, identity)
+	if reducedStreak.CurrentStreak != 1 || reducedStreak.BestStreak != 3 || reducedProfile.TotalPoints != profileAfterBonus.TotalPoints-10 {
+		t.Fatalf("correção não preservou histórico: streak=%#v perfil=%#v", reducedStreak, reducedProfile)
+	}
+	if _, err := executions.RecordSimple(ctx, identity, streakExecutions[1].ID, true); err != nil {
+		t.Fatalf("reconstruir sequência: %v", err)
+	}
+	awards, err := clients.Firestore.Collection("habitBonusAwards").Where("habitId", "==", gamificationHabit.ID).Documents(ctx).GetAll()
+	if err != nil || len(awards) != 1 {
+		t.Fatalf("bônus histórico duplicado: %d erro=%v", len(awards), err)
+	}
+	achievements, err := executions.Achievements(ctx, identity)
+	if err != nil || len(achievements) != 1 || achievements[0].Name != "Primeira sequência" {
+		t.Fatalf("conquista inválida: %#v erro=%v", achievements, err)
+	}
+	beforeConcurrent, _ := profiles.Get(ctx, identity)
+	var correctionGroup sync.WaitGroup
+	correctionErrors := make(chan error, 2)
+	for _, completed := range []bool{false, true} {
+		completed := completed
+		correctionGroup.Add(1)
+		go func() {
+			defer correctionGroup.Done()
+			_, correctionErr := executions.RecordSimple(ctx, identity, streakExecutions[1].ID, completed)
+			correctionErrors <- correctionErr
+		}()
+	}
+	correctionGroup.Wait()
+	close(correctionErrors)
+	for correctionErr := range correctionErrors {
+		if correctionErr != nil {
+			t.Fatalf("correção concorrente: %v", correctionErr)
+		}
+	}
+	finalMiddle, _ := executions.Get(ctx, identity, streakExecutions[1].ID)
+	finalProfile, _ := profiles.Get(ctx, identity)
+	finalStreak, _ := executions.Streak(ctx, identity, gamificationHabit.ID)
+	if finalMiddle.Status == execution.StatusCompleted {
+		if finalProfile.TotalPoints != beforeConcurrent.TotalPoints || finalStreak.CurrentStreak != 3 {
+			t.Fatalf("estado concorrente concluído inconsistente: execução=%#v perfil=%#v streak=%#v", finalMiddle, finalProfile, finalStreak)
+		}
+	} else if finalMiddle.Status == execution.StatusNotDone {
+		if finalProfile.TotalPoints != beforeConcurrent.TotalPoints-10 || finalStreak.CurrentStreak != 1 {
+			t.Fatalf("estado concorrente não realizado inconsistente: execução=%#v perfil=%#v streak=%#v", finalMiddle, finalProfile, finalStreak)
+		}
+	} else {
+		t.Fatalf("estado concorrente inesperado: %#v", finalMiddle)
+	}
+	if _, err := habits.Archive(ctx, identity, gamificationHabit.ID); err != nil {
+		t.Fatalf("arquivar hábito com streak: %v", err)
+	}
+	if _, err := habits.Reactivate(ctx, identity, "America/Sao_Paulo", gamificationHabit.ID); err != nil {
+		t.Fatalf("reativar hábito com streak: %v", err)
+	}
+	afterReactivation, err := executions.Streak(ctx, identity, gamificationHabit.ID)
+	if err != nil || afterReactivation.CurrentStreak != 0 || afterReactivation.BestStreak != 3 || len(afterReactivation.MilestonesAwarded) != 1 {
+		t.Fatalf("reativação não preservou histórico: %#v erro=%v", afterReactivation, err)
+	}
+	legacyHabit, err := habits.Create(ctx, identity, "America/Sao_Paulo", habit.Input{
+		Title: "Legado local", Description: "Validar reconciliação", GoalType: habit.GoalSimple,
+		Schedule: habit.Schedule{Weekdays: []int{1, 2, 3, 4, 5, 6, 7}, Time: "07:00", WeeklyTargetExecutions: 7, Reminder: habit.ReminderNotification},
+	})
+	if err != nil {
+		t.Fatalf("criar hábito legado: %v", err)
+	}
+	legacyCreatedAt := time.Now().Add(-time.Hour).UTC().Truncate(time.Microsecond)
+	legacyPerformedAt := legacyCreatedAt.Add(10 * time.Minute)
+	legacyExecution := execution.Execution{
+		ID: executionRepository.NewID(), OwnerUID: uid, HabitID: legacyHabit.ID,
+		ScheduledDate: time.Now().In(location).Format("2006-01-02"), GoalTypeSnapshot: habit.GoalSimple,
+		Status: execution.StatusCompleted, PerformedAt: &legacyPerformedAt, RegistrationDeadline: deadline,
+		CreatedAt: legacyCreatedAt, UpdatedAt: legacyCreatedAt,
+	}
+	if _, err := clients.Firestore.Collection("executions").Doc(legacyExecution.ID).Create(ctx, legacyExecution); err != nil {
+		t.Fatalf("persistir execução pré-Fase 5: %v", err)
+	}
+	profileBeforeLegacy, _ := profiles.Get(ctx, identity)
+	reconciledLegacy, err := executions.RecordSimple(ctx, identity, legacyExecution.ID, true)
+	if err != nil || reconciledLegacy.ScoredAt == nil || reconciledLegacy.PointsAwarded != 10 || reconciledLegacy.StreakAfter != 1 || !reconciledLegacy.UpdatedAt.Equal(legacyCreatedAt) {
+		t.Fatalf("resultado legado não reconciliado: %#v erro=%v", reconciledLegacy, err)
+	}
+	profileAfterLegacy, _ := profiles.Get(ctx, identity)
+	if profileAfterLegacy.TotalPoints != profileBeforeLegacy.TotalPoints+10 || profileAfterLegacy.TotalPointsReachedAt == nil {
+		t.Fatalf("total legado não reconciliado: antes=%#v depois=%#v", profileBeforeLegacy, profileAfterLegacy)
+	}
+	firstScoredAt := *reconciledLegacy.ScoredAt
+	firstTotalReachedAt := *profileAfterLegacy.TotalPointsReachedAt
+	legacyRepeated, err := executions.RecordSimple(ctx, identity, legacyExecution.ID, true)
+	profileAfterLegacyRepeat, _ := profiles.Get(ctx, identity)
+	if err != nil || legacyRepeated.ScoredAt == nil || !legacyRepeated.ScoredAt.Equal(firstScoredAt) || !legacyRepeated.UpdatedAt.Equal(legacyCreatedAt) || profileAfterLegacyRepeat.TotalPoints != profileAfterLegacy.TotalPoints || profileAfterLegacyRepeat.TotalPointsReachedAt == nil || !profileAfterLegacyRepeat.TotalPointsReachedAt.Equal(firstTotalReachedAt) {
+		t.Fatalf("segunda repetição legado não foi no-op: execução=%#v perfil=%#v erro=%v", legacyRepeated, profileAfterLegacyRepeat, err)
+	}
 	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
 	createdNote, err := notes.Create(ctx, identity, created.ID, history[0].ID, "Reflexão local")
 	if err != nil {
@@ -228,8 +360,15 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 		t.Fatalf("hábito excluído permaneceu acessível: %v", err)
 	}
 	listed, err := habits.List(ctx, identity, "America/Sao_Paulo", habit.FilterAll)
-	if err != nil || len(listed) != 1 || listed[0].ID != duplicated.ID {
+	if err != nil || len(listed) != 3 {
 		t.Fatalf("listagem após CRUD=%#v erro=%v", listed, err)
+	}
+	foundDuplicated := false
+	for _, listedHabit := range listed {
+		foundDuplicated = foundDuplicated || listedHabit.ID == duplicated.ID
+	}
+	if !foundDuplicated {
+		t.Fatalf("hábito duplicado ausente da listagem: %#v", listed)
 	}
 }
 
@@ -250,7 +389,7 @@ func cleanupEmulatorHabits(t *testing.T, clients *firebaseadmin.Clients, uid str
 		}
 		_, _ = doc.Ref.Delete(ctx)
 	}
-	for _, collection := range []string{"executions", "notes", "executionUniqueness", "habitOccurrenceCursors"} {
+	for _, collection := range []string{"executions", "notes", "executionUniqueness", "habitOccurrenceCursors", "habitStreaks", "habitBonusAwards", "userAchievements"} {
 		items, itemErr := clients.Firestore.Collection(collection).Where("ownerUid", "==", uid).Documents(ctx).GetAll()
 		if itemErr == nil {
 			for _, item := range items {
