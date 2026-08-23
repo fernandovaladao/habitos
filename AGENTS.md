@@ -10,7 +10,7 @@ A ERS prevalece em regras e comportamento. Os protótipos prevalecem como refer�
 ## Stack obrigatória do MVP
 - Go (Golang)
 - HTML + CSS + JavaScript leve; HTMX é permitido quando simplificar
-- PWA responsiva
+- Aplicação web responsiva; manifest, service worker e cache existentes não implicam requisito de funcionamento offline
 - Google Cloud Run
 - Cloud Firestore
 - Firebase Authentication

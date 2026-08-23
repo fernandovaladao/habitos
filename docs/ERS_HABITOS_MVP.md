@@ -1,8 +1,8 @@
 # ERS — Especificação de Requisitos de Software
 ## Projeto HÁBITOS — MVP
-**Versão:** 1.2
+**Versão:** 1.3
 **Idioma:** Português do Brasil  
-**Produto:** PWA responsiva  
+**Produto:** aplicação web responsiva<br>
 **Público-alvo:** adolescentes
 
 ## 1. Visão do produto
@@ -16,12 +16,12 @@ O HÁBITOS ajuda adolescentes a criar, organizar e manter hábitos positivos. Se
 O usuário deve poder criar conta, autenticar-se, compreender os 4 Rs, criar/editar hábitos, configurar metas e lembretes, receber sugestões com IA, registrar execuções, acompanhar progresso, acumular pontos, obter bônus de sequência e conquistas, optar por participar do ranking geral, editar perfil e excluir conta/dados.
 
 ### Fora do escopo
-Administrador, ligas, divisões, ranking semanal/mensal, punição ou perda de pontos por falha, marketplace, app nativo, chat, feed social, grupos, comentários, login social e criação/edição/registro offline.
+Administrador, ligas, divisões, ranking semanal/mensal, punição ou perda de pontos por falha, marketplace, app nativo, chat, feed social, grupos, comentários, login social e qualquer garantia de funcionamento ou disponibilidade offline.
 
 ## 3. Arquitetura aprovada
 - Backend: Go.
 - Frontend: HTML/CSS/JavaScript leve; HTMX permitido.
-- PWA.
+- Aplicação web responsiva. Manifest, service worker e cache estático existentes são detalhes técnicos e não estabelecem requisito de funcionamento offline.
 - Cloud Run.
 - Firestore.
 - Firebase Authentication.
@@ -136,7 +136,7 @@ Arquivar um hábito interrompe novas ocorrências e lembretes e preserva todo o 
 
 ## 14. Lembretes
 Notificação, E-mail ou Ambos. “Notificação” é o termo visível.
-Web Push/PWA pode ser usado internamente.
+Web Push pode ser usado internamente.
 
 ## 15. Autenticação
 Cadastro: apelido, e-mail, senha, idade.
@@ -177,11 +177,11 @@ Segredos só no servidor.
 No MVP, a exclusão de conta deve excluir, e não anonimizar, todos os dados pertencentes ao usuário, incluindo no mínimo perfil, hábitos, execuções, streaks/sequências, notas, desbloqueios de conquistas, preferências, projeção de ranking, registros de lembretes associados e fotos/objetos de Storage. O usuário deve ser removido do ranking. A operação exige confirmação explícita e deve ser implementada de forma idempotente e recuperável em caso de falha parcial entre serviços.
 
 ## 19. Requisitos funcionais resumidos
-RF-001 Cadastro; RF-002 Login; RF-003 Recuperar senha; RF-004 Alterar senha; RF-005 Criar hábito; RF-006 Editar; RF-007 Arquivar; RF-008 Excluir; RF-009 Meta simples; RF-010 Meta quantitativa; RF-011 Dias; RF-012 Horário; RF-013 Notificação; RF-014 E-mail; RF-015 Ambos; RF-016 IA; RF-017 Registro simples; RF-018 Registro quantitativo; RF-019 Parcial; RF-020 Pontuação proporcional; RF-021 Sequência; RF-022 Bônus; RF-023 Ranking; RF-024 Privacidade ranking; RF-025 Progresso; RF-026 Histórico; RF-027 Notas; RF-028 Perfil; RF-029 Avatar/foto; RF-030 Exclusão conta; RF-031 Aprenda os 4 Rs; RF-032 PWA.
+RF-001 Cadastro; RF-002 Login; RF-003 Recuperar senha; RF-004 Alterar senha; RF-005 Criar hábito; RF-006 Editar; RF-007 Arquivar; RF-008 Excluir; RF-009 Meta simples; RF-010 Meta quantitativa; RF-011 Dias; RF-012 Horário; RF-013 Notificação; RF-014 E-mail; RF-015 Ambos; RF-016 IA; RF-017 Registro simples; RF-018 Registro quantitativo; RF-019 Parcial; RF-020 Pontuação proporcional; RF-021 Sequência; RF-022 Bônus; RF-023 Ranking; RF-024 Privacidade ranking; RF-025 Progresso; RF-026 Histórico; RF-027 Notas; RF-028 Perfil; RF-029 Avatar/foto; RF-030 Exclusão conta; RF-031 Aprenda os 4 Rs.
 
 ## 20. Requisitos não funcionais
 Responsividade; HTTPS; Firebase Auth; privacidade; monólito modular em Go; logs sem segredos; foco em free tiers; acessibilidade; PT-BR; navegadores modernos; segurança de IA.
-A PWA deve manter em cache a interface e o conteúdo estático. Criação, edição e registro offline não fazem parte do MVP.
+Funcionamento offline, inclusive disponibilidade de páginas ou conteúdo sem conexão, não é requisito do MVP.
 
 ## 21. Cálculo do progresso
 A taxa de progresso de cada ocorrência usa: concluído = 100%; parcial quantitativo = `min(100, 100 × realizado/meta)`; não realizado = 0%.
@@ -201,7 +201,7 @@ Autorização: usuário A não acessa hábito de B.
 Exclusão: remoção idempotente dos dados do usuário e do ranking.
 
 ## 23. Ordem recomendada
-1. Fundação: Go, Cloud Run, Firebase, Firestore, PWA.
+1. Fundação: Go, Cloud Run, Firebase, Firestore e aplicação web responsiva.
 2. Hábitos.
 3. Execuções/metas.
 4. Pontuação/Sequências/Conquistas.
