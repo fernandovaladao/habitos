@@ -114,7 +114,6 @@ func Load() (Config, error) {
 		"FIREBASE_AUTH_DOMAIN":    config.FirebaseAuthDomain,
 		"FIREBASE_APP_ID":         config.FirebaseAppID,
 		"FIREBASE_STORAGE_BUCKET": config.FirebaseStorageBucket,
-		"OPENAI_API_KEY":          config.OpenAIAPIKey,
 	} {
 		if value == "" {
 			missing = append(missing, name)
@@ -123,10 +122,16 @@ func Load() (Config, error) {
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("variáveis obrigatórias ausentes: %v", missing)
 	}
+	if !config.ReminderProcessor && config.OpenAIAPIKey == "" {
+		return Config{}, fmt.Errorf("OPENAI_API_KEY é obrigatória no serviço web")
+	}
 	if environment == "production" && !config.SecureCookies {
 		return Config{}, fmt.Errorf("SESSION_COOKIE_SECURE não pode ser false em produção")
 	}
 	if environment == "production" {
+		if config.ReminderProcessor && config.OpenAIAPIKey != "" {
+			return Config{}, fmt.Errorf("OPENAI_API_KEY não deve ser configurada no processador de lembretes")
+		}
 		if authEmulatorHost != "" || firestoreEmulatorHost != "" || storageEmulatorHost != "" {
 			return Config{}, fmt.Errorf("emuladores Firebase não são permitidos em produção")
 		}

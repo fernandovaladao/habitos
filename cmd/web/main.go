@@ -53,7 +53,7 @@ func main() {
 	notes := note.NewService(note.NewFirestoreRepository(clients.Firestore), habits, executions)
 	progressService := progress.NewService(progress.NewFirestoreRepository(clients.Firestore))
 	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
-	suggestionService := habitsuggestion.NewService(habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel}), appConfig.AIRequestTimeout)
+	suggestionService := habitsuggestion.NewService(newSuggestionProvider(appConfig), appConfig.AIRequestTimeout)
 	avatarService := avatar.NewService(avatar.NewFirestoreRepository(clients.Firestore), avatar.NewStorage(clients.Storage))
 	reminderService := reminder.NewService(reminder.NewFirestoreRepository(clients.Firestore), reminder.NewResendSender(appConfig.ResendAPIKey, appConfig.EmailFrom, appConfig.AppBaseURL, appConfig.EmailRequestTimeout), reminder.NewWebPushSender(appConfig.VAPIDPublicKey, appConfig.VAPIDPrivateKey, appConfig.VAPIDSubscriber))
 	deletionService := accountdeletion.NewService(accountdeletion.NewFirestoreRepository(clients.Firestore), accountdeletion.NewStorage(clients.Storage), sessions, accountdeletion.NewFirebaseAccountStore(clients.Auth))
@@ -115,4 +115,11 @@ func main() {
 		}
 		logger.Info("servidor encerrado")
 	}
+}
+
+func newSuggestionProvider(appConfig config.Config) habitsuggestion.Provider {
+	if appConfig.ReminderProcessor {
+		return habitsuggestion.DisabledProvider{}
+	}
+	return habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel})
 }

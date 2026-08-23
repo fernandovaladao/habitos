@@ -60,6 +60,30 @@ func TestLoadReadsOpenAIConfiguration(t *testing.T) {
 	}
 }
 
+func TestLoadRequiresOpenAIKeyForWebRole(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("OPENAI_API_KEY", "")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("serviço web deveria exigir OPENAI_API_KEY")
+	}
+}
+
+func TestProductionWebAcceptsOpenAIWithoutReminderSecrets(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_BASE_URL", "https://habitos.example.test")
+	t.Setenv("VAPID_PUBLIC_KEY", "public")
+
+	value, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if value.ReminderProcessor || value.OpenAIAPIKey != "openai-test-key" || value.ResendAPIKey != "" || value.VAPIDPrivateKey != "" {
+		t.Fatalf("configuração=%#v", value)
+	}
+}
+
 func TestLoadRejectsInvalidAITimeout(t *testing.T) {
 	setRequiredFirebaseEnvironment(t)
 	t.Setenv("AI_REQUEST_TIMEOUT", "zero")
@@ -184,6 +208,7 @@ func TestReminderProcessorLocalBypassRequiresDemoEmulators(t *testing.T) {
 
 func TestProductionProcessorRequiresBackendReminderSecrets(t *testing.T) {
 	setRequiredFirebaseEnvironment(t)
+	t.Setenv("OPENAI_API_KEY", "")
 	t.Setenv("APP_ENV", "production")
 	t.Setenv("SESSION_COOKIE_SECURE", "true")
 	t.Setenv("VAPID_PUBLIC_KEY", "public")
@@ -199,8 +224,24 @@ func TestProductionProcessorRequiresBackendReminderSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !value.ReminderProcessor || value.VAPIDPrivateKey != "private" {
+	if !value.ReminderProcessor || value.VAPIDPrivateKey != "private" || value.OpenAIAPIKey != "" {
 		t.Fatalf("configuração=%#v", value)
+	}
+}
+
+func TestProductionProcessorRejectsOpenAIKey(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("APP_BASE_URL", "https://habitos.example.test")
+	t.Setenv("VAPID_PUBLIC_KEY", "public")
+	t.Setenv("VAPID_PRIVATE_KEY", "private")
+	t.Setenv("VAPID_SUBSCRIBER", "mailto:test@example.test")
+	t.Setenv("RESEND_API_KEY", "resend-secret")
+	t.Setenv("EMAIL_FROM", "HÁBITOS <test@example.test>")
+	t.Setenv("REMINDER_PROCESSOR_ENABLED", "true")
+
+	if _, err := Load(); err == nil {
+		t.Fatal("processador de produção não deveria aceitar OPENAI_API_KEY")
 	}
 }
 
