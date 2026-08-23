@@ -19,6 +19,7 @@ import (
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
+	"habitos/internal/progress"
 )
 
 func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
@@ -358,6 +359,27 @@ func TestAuthenticationAndProfileWithFirebaseEmulators(t *testing.T) {
 	}
 	if _, err := habits.Get(ctx, identity, created.ID); !errors.Is(err, habit.ErrNotFound) {
 		t.Fatalf("hábito excluído permaneceu acessível: %v", err)
+	}
+	progressService := progress.NewService(progress.NewFirestoreRepository(clients.Firestore))
+	progressReport, err := progressService.Report(ctx, identity, "America/Sao_Paulo", progress.Query{Kind: progress.PeriodCustom, StartDate: today, EndDate: today})
+	if err != nil {
+		t.Fatalf("consultar progresso no Emulator: %v", err)
+	}
+	if progressReport.Rate.Denominator == 0 || progressReport.Points == 0 || len(progressReport.Achievements) == 0 {
+		t.Fatalf("progresso não agregou fatos reais: %#v", progressReport)
+	}
+	foundMaskedDeleted := false
+	for _, item := range progressReport.ByHabit {
+		if item.HabitID == created.ID {
+			foundMaskedDeleted = item.Deleted && item.Title == "Hábito excluído"
+		}
+	}
+	if !foundMaskedDeleted {
+		t.Fatalf("hábito excluído não foi mascarado no detalhamento: %#v", progressReport.ByHabit)
+	}
+	otherReport, err := progressService.Report(ctx, auth.Identity{UID: "outro-uid"}, "America/Sao_Paulo", progress.Query{Kind: progress.PeriodCustom, StartDate: today, EndDate: today})
+	if err != nil || otherReport.Rate.Denominator != 0 || otherReport.Points != 0 {
+		t.Fatalf("progresso não isolou outro UID: %#v erro=%v", otherReport, err)
 	}
 	listed, err := habits.List(ctx, identity, "America/Sao_Paulo", habit.FilterAll)
 	if err != nil || len(listed) != 3 {

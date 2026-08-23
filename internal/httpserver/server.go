@@ -8,6 +8,7 @@ import (
 	"html/template"
 	"io/fs"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"strconv"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
+	"habitos/internal/progress"
 	webassets "habitos/web"
 )
 
@@ -44,6 +46,7 @@ type Dependencies struct {
 	Habits     *habit.Service
 	Executions *execution.Service
 	Notes      *note.Service
+	Progress   *progress.Service
 }
 
 type pageData struct {
@@ -67,6 +70,7 @@ type pageData struct {
 	Achievements      []gamification.UserAchievement
 	MaxCurrentStreak  int
 	HabitTitles       map[string]string
+	Progress          progress.Report
 	FirebaseEnabled   bool
 }
 
@@ -79,6 +83,7 @@ type handler struct {
 	habits        *habit.Service
 	executions    *execution.Service
 	notes         *note.Service
+	progress      *progress.Service
 	auth          *auth.Middleware
 	csrf          *csrf.Protector
 	secureCookies bool
@@ -112,11 +117,11 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil {
-		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções e notas são obrigatórias")
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil {
+		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas e progresso são obrigatórias")
 	}
 
-	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
+	templates, err := template.New("").Funcs(template.FuncMap{"amount": formatHundredths, "unitLabel": unitLabel, "weekdayLabel": weekdayLabel, "statusLabel": statusLabel, "executionStatusLabel": executionStatusLabel, "reminderLabel": reminderLabel, "ratePercent": ratePercent, "countPercent": countPercent, "shortDate": shortDate, "hasWeekday": hasWeekday, "listWeekdays": func() []int { return []int{1, 2, 3, 4, 5, 6, 7} }}).ParseFS(webassets.Files, "templates/layouts/*.html", "templates/pages/*.html", "templates/partials/*.html")
 	if err != nil {
 		return nil, fmt.Errorf("carregar templates: %w", err)
 	}
@@ -134,6 +139,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 		habits:        dependencies.Habits,
 		executions:    dependencies.Executions,
 		notes:         dependencies.Notes,
+		progress:      dependencies.Progress,
 		auth:          auth.NewMiddleware(dependencies.Sessions),
 		csrf:          csrf.New(config.SecureCookies),
 		secureCookies: config.SecureCookies,
@@ -389,13 +395,32 @@ func (h *handler) progressData(r *http.Request) (pageData, error) {
 }
 
 func (h *handler) progressPage(w http.ResponseWriter, r *http.Request) {
-	data, err := h.progressData(r)
+	identity, userProfile, err := h.authenticatedProfile(r)
 	if err != nil {
 		h.renderHabitError(w, err)
 		return
 	}
-	data.Title, data.Description, data.Path = "Progresso", "Acompanhe seus pontos e sequências.", "/progresso"
-	h.render(w, http.StatusOK, "progress", data)
+	habits, err := h.habits.List(r.Context(), identity, userProfile.Timezone, habit.FilterAll)
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	for _, value := range habits {
+		if err := h.syncHabit(r, identity, userProfile, value); err != nil {
+			h.renderHabitError(w, err)
+			return
+		}
+	}
+	report, err := h.progress.Report(r.Context(), identity, userProfile.Timezone, progress.Query{Kind: progress.PeriodKind(r.URL.Query().Get("periodo")), StartDate: r.URL.Query().Get("inicio"), EndDate: r.URL.Query().Get("fim")})
+	if errors.Is(err, progress.ErrInvalidPeriod) || errors.Is(err, progress.ErrPeriodTooLong) {
+		h.render(w, http.StatusUnprocessableEntity, "error", pageData{Title: "Período inválido", Description: err.Error(), Path: "/progresso", Authenticated: true, Profile: userProfile})
+		return
+	}
+	if err != nil {
+		h.renderHabitError(w, err)
+		return
+	}
+	h.render(w, http.StatusOK, "progress", pageData{Title: "Progresso", Description: "Acompanhe seu progresso no período.", Path: "/progresso", Authenticated: true, Profile: userProfile, Progress: report})
 }
 
 func (h *handler) rewardsPage(w http.ResponseWriter, r *http.Request) {
@@ -919,6 +944,34 @@ func hasWeekday(days []int, want int) bool {
 		}
 	}
 	return false
+}
+
+func ratePercent(value progress.Rate) int {
+	if value.Denominator == 0 || value.Contribution == nil {
+		return 0
+	}
+	percentage := new(big.Rat).Mul(new(big.Rat).Set(value.Contribution), big.NewRat(100, int64(value.Denominator)))
+	quotient, remainder := new(big.Int), new(big.Int)
+	quotient.QuoRem(percentage.Num(), percentage.Denom(), remainder)
+	if new(big.Int).Mul(remainder, big.NewInt(2)).Cmp(percentage.Denom()) >= 0 {
+		quotient.Add(quotient, big.NewInt(1))
+	}
+	return int(quotient.Int64())
+}
+
+func countPercent(count, total int) int {
+	if total == 0 {
+		return 0
+	}
+	return int((int64(count)*100 + int64(total)/2) / int64(total))
+}
+
+func shortDate(value string) string {
+	parsed, err := time.Parse("2006-01-02", value)
+	if err != nil {
+		return value
+	}
+	return parsed.Format("02/01")
 }
 
 func (h *handler) serviceWorker(w http.ResponseWriter, r *http.Request) {

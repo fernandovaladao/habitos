@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -20,6 +21,7 @@ import (
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
+	"habitos/internal/progress"
 )
 
 type fakeSessionManager struct {
@@ -197,6 +199,24 @@ type fakeNoteRepository struct {
 	next   int
 }
 
+type fakeProgressRepository struct{}
+
+func (*fakeProgressRepository) Executions(context.Context, string, string, string) ([]execution.Execution, error) {
+	return nil, nil
+}
+func (*fakeProgressRepository) BonusAwards(context.Context, string, string, string) ([]gamification.BonusAward, error) {
+	return nil, nil
+}
+func (*fakeProgressRepository) Streaks(context.Context, string) ([]gamification.Streak, error) {
+	return nil, nil
+}
+func (*fakeProgressRepository) Achievements(context.Context, string) ([]gamification.UserAchievement, error) {
+	return nil, nil
+}
+func (*fakeProgressRepository) Habits(context.Context, string, []string) (map[string]progress.HabitDescriptor, error) {
+	return map[string]progress.HabitDescriptor{}, nil
+}
+
 func newFakeNoteRepository() *fakeNoteRepository {
 	return &fakeNoteRepository{values: map[string]note.Note{}}
 }
@@ -305,7 +325,7 @@ func newTestApp(t *testing.T) testApp {
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{})})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
@@ -504,6 +524,37 @@ func TestGamificationPagesRequireSessionAndRenderAuthenticatedData(t *testing.T)
 		if authenticated.Code != http.StatusOK || !strings.Contains(authenticated.Body.String(), "0") {
 			t.Fatalf("%s autenticado status=%d corpo=%s", path, authenticated.Code, authenticated.Body.String())
 		}
+	}
+}
+
+func TestProgressPresentationRoundsHalfUp(t *testing.T) {
+	tests := []struct {
+		name string
+		rate progress.Rate
+		want int
+	}{
+		{name: "exato", rate: progress.Rate{Contribution: big.NewRat(1, 1), Denominator: 2}, want: 50},
+		{name: "metade para cima", rate: progress.Rate{Contribution: big.NewRat(1, 200), Denominator: 1}, want: 1},
+		{name: "abaixo da metade", rate: progress.Rate{Contribution: big.NewRat(49, 10000), Denominator: 1}, want: 0},
+		{name: "sem denominador", rate: progress.EmptyRate(), want: 0},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ratePercent(test.rate); got != test.want {
+				t.Fatalf("ratePercent() = %d, esperado %d", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProgressRejectsCustomPeriodLongerThan366Days(t *testing.T) {
+	app := newTestApp(t)
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/progresso?periodo=custom&inicio=2024-01-01&fim=2025-01-01", nil)
+	request.AddCookie(&http.Cookie{Name: auth.SessionCookieName, Value: "valid"})
+	app.handler.ServeHTTP(recorder, request)
+	if recorder.Code != http.StatusUnprocessableEntity || !strings.Contains(recorder.Body.String(), "no máximo 366 dias") {
+		t.Fatalf("status=%d corpo=%s", recorder.Code, recorder.Body.String())
 	}
 }
 

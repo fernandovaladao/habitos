@@ -284,6 +284,26 @@ p { color: var(--muted); font-size: 1.05rem; }
 .metric-value { color: var(--blue-700); font-size: clamp(2rem, 5vw, 3rem); font-weight: 800; margin: .35rem 0; }
 .metric-value--accent, .achievement-card > span { color: var(--orange-500); }
 .achievement-card > span { font-size: 2rem; }
+.progress-metrics { display: grid; grid-template-columns: repeat(2, 1fr); gap: 24px; }
+.period-caption { color: var(--muted); font-weight: 700; }
+.custom-period-form { display: flex; align-items: end; gap: 16px; padding: 18px; margin-bottom: 18px; }
+.custom-period-form label { flex: 1; }
+.custom-period-form input { display: block; width: 100%; margin-top: 6px; padding: 10px; border: 1px solid var(--border); border-radius: 10px; }
+.progress-section { margin-top: 32px; }
+.evolution-chart { display: flex; align-items: end; gap: 12px; min-height: 260px; padding: 24px; overflow-x: auto; }
+.evolution-column { display: flex; flex: 1 0 54px; flex-direction: column; align-items: center; justify-content: end; height: 210px; gap: 6px; }
+.evolution-value { min-height: 20px; color: var(--muted); font-size: .8rem; }
+.evolution-bar { display: block; width: min(34px, 70%); min-height: 3px; max-height: 150px; background: var(--blue-700); border-radius: 8px 8px 2px 2px; }
+.evolution-bar--future, .evolution-bar--empty { height: 3px; background: var(--border); }
+.distribution-list { display: grid; gap: 14px; padding: 24px; }
+.distribution-list > div { display: grid; grid-template-columns: minmax(180px, 1fr) 3fr 52px; align-items: center; gap: 14px; }
+.distribution-list progress, .habit-progress-row progress { width: 100%; accent-color: #2d9d61; }
+.distribution-list .progress-partial { accent-color: var(--orange-500); }
+.distribution-list .progress-not-done { accent-color: #d64545; }
+.habit-progress-list { display: grid; gap: 12px; }
+.habit-progress-row { display: grid; grid-template-columns: minmax(180px, 1fr) 3fr 60px; align-items: center; gap: 18px; padding: 18px; }
+.habit-progress-row .status-pill { margin-left: 8px; }
+.metric-empty { color: var(--muted); font-weight: 700; }
 
 @media (max-width: 700px) {
   .form-grid, .details-grid { grid-template-columns: 1fr; }
@@ -291,4 +311,7 @@ p { color: var(--muted); font-size: 1.05rem; }
   .habit-card, .page-heading { flex-direction: column; }
   .habit-card__actions { justify-content: flex-start; }
   .filter-tabs { overflow-x: auto; }
+  .progress-metrics { grid-template-columns: 1fr; }
+  .custom-period-form { align-items: stretch; flex-direction: column; }
+  .distribution-list > div, .habit-progress-row { grid-template-columns: 1fr; }
 }
