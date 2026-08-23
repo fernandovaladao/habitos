@@ -6,6 +6,7 @@ require (
 	cloud.google.com/go/firestore v1.22.0
 	cloud.google.com/go/storage v1.62.1
 	firebase.google.com/go/v4 v4.21.0
+	github.com/SherClockHolmes/webpush-go v1.4.0
 	golang.org/x/image v0.37.0
 	google.golang.org/api v0.279.0
 	google.golang.org/grpc v1.81.1
@@ -33,6 +34,7 @@ require (
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/golang-jwt/jwt/v4 v4.5.2 // indirect
+	github.com/golang-jwt/jwt/v5 v5.2.1 // indirect
 	github.com/golang/protobuf v1.5.4 // indirect
 	github.com/google/s2a-go v0.1.9 // indirect
 	github.com/google/uuid v1.6.0 // indirect

@@ -13,7 +13,7 @@ O usuário inicia a operação irreversível digitando literalmente `EXCLUIR MIN
 
 O backend cria idempotentemente `accountDeletions/{sha256(uid)}` e remove `publicRanking/{uid}` na mesma transação. O UID e o e-mail vêm exclusivamente da sessão e do ID token verificados e devem coincidir. Continuações exigem apenas uma sessão válida da mesma identidade e seu marcador enquanto a conta Auth existir; não repetem a exigência de autenticação recente.
 
-O marcador bloqueia rotas funcionais e também é lido dentro de cada transação persistente capaz de criar ou alterar dados do usuário. Assim, uma transação iniciada antes da exclusão é repetida ou abortada quando o marcador concorrente é criado. Isso abrange bootstrap/edição de perfil e projeção pública, hábitos e agenda, execuções, cursores, gamificação, notas e ativação de foto. Um upload cujo objeto já tenha sido gravado, mas cuja ativação seja barrada, tenta remover o novo objeto como compensação.
+O marcador bloqueia rotas funcionais e também é lido dentro de cada transação persistente capaz de criar ou alterar dados do usuário. Assim, uma transação iniciada antes da exclusão é repetida ou abortada quando o marcador concorrente é criado. Isso abrange bootstrap/edição de perfil e projeção pública, hábitos e agenda, execuções, cursores, gamificação, notas, ativação de foto, subscriptions Push, projeções e entregas de lembretes. Um upload cujo objeto já tenha sido gravado, mas cuja ativação seja barrada, tenta remover o novo objeto como compensação.
 
 Cada chamada de continuação adquire transacionalmente no próprio marcador um lease exclusivo de um minuto (`leaseId` e `leaseUntil`). Uma segunda chamada durante o lease não executa nem avança o estágio; apenas informa o estágio observado. O lease expirável permite retomada depois de queda do processo. A liberação usa o identificador do titular e não remove lease alheio. Com isso, `DeleteBatch` e `SetStage` são executados por um único continuador, evitando regressão ou avanço concorrente do estado; a idempotência dos lotes continua protegendo respostas perdidas.
 
@@ -29,10 +29,11 @@ O processo avança em lotes idempotentes de no máximo 200 documentos, nesta ord
 8. todas as subcoleções `scheduleVersions` do usuário;
 9. hábitos ativos, arquivados e logicamente excluídos;
 10. `avatarMedia` e `avatarCleanup`;
-11. perfil `users/{uid}`, incluindo preferências;
-12. todos os objetos sob `avatars/{uid}/` no Storage;
-13. varredura final estável de todas as fontes anteriores e de `publicRanking/{uid}`;
-14. revogação dos tokens, exclusão do usuário no Firebase Authentication, remoção do marcador e limpeza dos cookies de sessão e CSRF.
+11. `pushSubscriptions`, `reminderSchedules` e `reminderDeliveries`;
+12. perfil `users/{uid}`, incluindo preferências;
+13. todos os objetos sob `avatars/{uid}/` no Storage;
+14. varredura final estável de todas as fontes anteriores e de `publicRanking/{uid}`;
+15. revogação dos tokens, exclusão do usuário no Firebase Authentication, remoção do marcador e limpeza dos cookies de sessão e CSRF.
 
 A varredura volta à primeira etapa se encontrar qualquer dado funcional remanescente e volta ao Storage se encontrar objetos. A existência do próprio marcador não impede a conclusão. Depois da revogação não resta trabalho funcional dependente de outra chamada autenticada. `DeleteUser` já realizado é tratado como sucesso; se a resposta tiver sido perdida, a repetição recebe “usuário ausente” e conclui. A falha ao remover o marcador depois da exclusão do Auth não transforma a conta em existente novamente.
 
@@ -40,7 +41,7 @@ O marcador não recebe expiração enquanto a exclusão funcional está em andam
 
 ## Inventário obrigatório
 
-Persistências atuais pertencentes ao usuário: `users`, `habits` e suas `scheduleVersions`, `executions`, `executionUniqueness`, `habitOccurrenceCursors`, `notes`, `habitStreaks`, `habitBonusAwards`, `userAchievements`, `publicRanking`, `avatarMedia`, `avatarCleanup`, objetos `avatars/{uid}/...` e a conta Firebase Authentication. `accountDeletions` é estado técnico temporário do próprio fluxo.
+Persistências atuais pertencentes ao usuário: `users`, `habits` e suas `scheduleVersions`, `executions`, `executionUniqueness`, `habitOccurrenceCursors`, `notes`, `habitStreaks`, `habitBonusAwards`, `userAchievements`, `publicRanking`, `avatarMedia`, `avatarCleanup`, `pushSubscriptions`, `reminderSchedules`, `reminderDeliveries`, objetos `avatars/{uid}/...` e a conta Firebase Authentication. `accountDeletions` é estado técnico temporário do próprio fluxo.
 
 Qualquer fase futura que crie persistência por usuário deve obrigatoriamente atualizar este inventário, o processo de exclusão, a varredura final e seus testes antes de ser considerada concluída.
 

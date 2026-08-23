@@ -24,6 +24,7 @@ import (
 	"habitos/internal/profile"
 	"habitos/internal/progress"
 	"habitos/internal/ranking"
+	"habitos/internal/reminder"
 )
 
 func main() {
@@ -54,6 +55,7 @@ func main() {
 	rankingService := ranking.NewService(ranking.NewFirestoreRepository(clients.Firestore))
 	suggestionService := habitsuggestion.NewService(habitsuggestion.NewOpenAIProvider(habitsuggestion.OpenAIConfig{APIKey: appConfig.OpenAIAPIKey, Model: appConfig.OpenAIModel}), appConfig.AIRequestTimeout)
 	avatarService := avatar.NewService(avatar.NewFirestoreRepository(clients.Firestore), avatar.NewStorage(clients.Storage))
+	reminderService := reminder.NewService(reminder.NewFirestoreRepository(clients.Firestore), reminder.NewResendSender(appConfig.ResendAPIKey, appConfig.EmailFrom, appConfig.AppBaseURL, appConfig.EmailRequestTimeout), reminder.NewWebPushSender(appConfig.VAPIDPublicKey, appConfig.VAPIDPrivateKey, appConfig.VAPIDSubscriber))
 	deletionService := accountdeletion.NewService(accountdeletion.NewFirestoreRepository(clients.Firestore), accountdeletion.NewStorage(clients.Storage), sessions, accountdeletion.NewFirebaseAccountStore(clients.Auth))
 	server, err := httpserver.New(httpserver.Config{
 		Port:          appConfig.Port,
@@ -66,6 +68,8 @@ func main() {
 			AppID:           appConfig.FirebaseAppID,
 			AuthEmulatorURL: appConfig.AuthEmulatorURL,
 		},
+		VAPIDPublicKey:    appConfig.VAPIDPublicKey,
+		ReminderProcessor: appConfig.ReminderProcessor,
 	}, httpserver.Dependencies{
 		Sessions:     sessions,
 		Profiles:     profiles,
@@ -78,6 +82,7 @@ func main() {
 		Avatars:      avatarService,
 		Deletion:     deletionService,
 		AccountState: accountstate.NewFirestoreChecker(clients.Firestore),
+		Reminders:    reminderService,
 	})
 	if err != nil {
 		logger.Error("falha ao configurar o servidor", "error", err)

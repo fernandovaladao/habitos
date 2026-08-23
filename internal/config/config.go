@@ -3,6 +3,7 @@ package config
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"time"
 )
 
@@ -26,6 +27,14 @@ type Config struct {
 	OpenAIAPIKey          string
 	OpenAIModel           string
 	AIRequestTimeout      time.Duration
+	AppBaseURL            string
+	VAPIDPublicKey        string
+	VAPIDPrivateKey       string
+	VAPIDSubscriber       string
+	ResendAPIKey          string
+	EmailFrom             string
+	EmailRequestTimeout   time.Duration
+	ReminderProcessor     bool
 }
 
 func Load() (Config, error) {
@@ -41,12 +50,33 @@ func Load() (Config, error) {
 		FirebaseStorageBucket: os.Getenv("FIREBASE_STORAGE_BUCKET"),
 		OpenAIAPIKey:          os.Getenv("OPENAI_API_KEY"),
 		OpenAIModel:           envOrDefault("OPENAI_MODEL", "gpt-5.6-luna"),
+		AppBaseURL:            os.Getenv("APP_BASE_URL"),
+		VAPIDPublicKey:        os.Getenv("VAPID_PUBLIC_KEY"),
+		VAPIDPrivateKey:       os.Getenv("VAPID_PRIVATE_KEY"),
+		VAPIDSubscriber:       os.Getenv("VAPID_SUBSCRIBER"),
+		ResendAPIKey:          os.Getenv("RESEND_API_KEY"),
+		EmailFrom:             os.Getenv("EMAIL_FROM"),
+	}
+	if config.AppBaseURL == "" && environment != "production" {
+		config.AppBaseURL = "http://localhost:8080"
 	}
 	requestTimeout, err := time.ParseDuration(envOrDefault("AI_REQUEST_TIMEOUT", "10s"))
 	if err != nil || requestTimeout <= 0 {
 		return Config{}, fmt.Errorf("AI_REQUEST_TIMEOUT deve ser uma duração positiva")
 	}
 	config.AIRequestTimeout = requestTimeout
+	emailTimeout, err := time.ParseDuration(envOrDefault("EMAIL_REQUEST_TIMEOUT", "10s"))
+	if err != nil || emailTimeout <= 0 {
+		return Config{}, fmt.Errorf("EMAIL_REQUEST_TIMEOUT deve ser uma duração positiva")
+	}
+	config.EmailRequestTimeout = emailTimeout
+	if value := os.Getenv("REMINDER_PROCESSOR_ENABLED"); value != "" {
+		parsed, parseErr := strconv.ParseBool(value)
+		if parseErr != nil {
+			return Config{}, fmt.Errorf("REMINDER_PROCESSOR_ENABLED deve ser true ou false")
+		}
+		config.ReminderProcessor = parsed
+	}
 
 	if value := os.Getenv("SESSION_COOKIE_SECURE"); value != "" {
 		switch value {
@@ -85,6 +115,20 @@ func Load() (Config, error) {
 	if environment == "production" && !config.SecureCookies {
 		return Config{}, fmt.Errorf("SESSION_COOKIE_SECURE não pode ser false em produção")
 	}
+	if environment == "production" {
+		for name, value := range map[string]string{"APP_BASE_URL": config.AppBaseURL, "VAPID_PUBLIC_KEY": config.VAPIDPublicKey} {
+			if value == "" {
+				return Config{}, fmt.Errorf("%s é obrigatório em produção", name)
+			}
+		}
+		if config.ReminderProcessor {
+			for name, value := range map[string]string{"VAPID_PRIVATE_KEY": config.VAPIDPrivateKey, "VAPID_SUBSCRIBER": config.VAPIDSubscriber, "RESEND_API_KEY": config.ResendAPIKey, "EMAIL_FROM": config.EmailFrom} {
+				if value == "" {
+					return Config{}, fmt.Errorf("%s é obrigatório no processador de produção", name)
+				}
+			}
+		}
+	}
 	usingEmulators := authEmulatorHost != "" || firestoreEmulatorHost != "" || storageEmulatorHost != ""
 	if usingEmulators {
 		if authEmulatorHost != LocalAuthEmulatorHost || firestoreEmulatorHost != LocalFirestoreEmulatorHost || storageEmulatorHost != LocalStorageEmulatorHost {
@@ -96,6 +140,9 @@ func Load() (Config, error) {
 		if googleProjectID := os.Getenv("GCLOUD_PROJECT"); googleProjectID != "" && googleProjectID != LocalEmulatorProjectID {
 			return Config{}, fmt.Errorf("GCLOUD_PROJECT deve ser %s ao usar emuladores", LocalEmulatorProjectID)
 		}
+	}
+	if config.ReminderProcessor && environment == "development" && (!usingEmulators || config.FirebaseProjectID != LocalEmulatorProjectID) {
+		return Config{}, fmt.Errorf("processador local de lembretes exige projeto demo e todos os emuladores")
 	}
 
 	return config, nil

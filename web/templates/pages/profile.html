@@ -56,7 +56,7 @@
 
       <section class="card profile-card">
         <h2>Preferências de lembretes</h2>
-        <p class="field-help">Estas opções funcionarão como bloqueio mestre de cada canal. O envio real de lembretes ainda não está ativo.</p>
+        <p class="field-help">Estas opções bloqueiam globalmente cada canal, mesmo quando um hábito solicita a entrega.</p>
         <label class="checkbox-row" for="reminder-notification-enabled">
           <input id="reminder-notification-enabled" name="reminderNotificationEnabled" type="checkbox" {{if .Profile.ReminderNotificationEnabled}}checked{{end}}>
           Permitir lembretes por Notificação
@@ -65,6 +65,14 @@
           <input id="reminder-email-enabled" name="reminderEmailEnabled" type="checkbox" {{if .Profile.ReminderEmailEnabled}}checked{{end}}>
           Permitir lembretes por E-mail
         </label>
+        <div class="push-devices" data-push-settings data-vapid-public-key="{{.VAPIDPublicKey}}">
+          <h3>Notificações neste dispositivo</h3>
+          <p class="field-help">A mensagem exibida na tela bloqueada é neutra e não mostra o nome do hábito.</p>
+          <button class="button button--secondary" type="button" data-enable-push {{if not .VAPIDPublicKey}}disabled{{end}}>Ativar neste dispositivo</button>
+          <p><strong>Dispositivos ativos:</strong> {{len .PushSubscriptions}} de 10</p>
+          {{range .PushSubscriptions}}<div class="push-device"><span>Dispositivo cadastrado em {{shortDate (.CreatedAt.Format "2006-01-02")}}</span><button type="button" class="link-button danger" data-disable-push="{{.ID}}">Desativar</button></div>{{end}}
+          <p class="form-message" data-push-message role="status" aria-live="polite"></p>
+        </div>
       </section>
 
       <section class="card profile-card">

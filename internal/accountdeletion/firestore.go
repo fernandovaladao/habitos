@@ -111,7 +111,7 @@ func (r *FirestoreRepository) ReleaseLease(ctx context.Context, uid, leaseID str
 }
 
 func nextStage(stage Stage) Stage {
-	stages := []Stage{StageNotes, StageUniqueness, StageExecutions, StageCursors, StageStreaks, StageBonuses, StageAchievements, StageSchedules, StageHabits, StageAvatarMedia, StageAvatarCleanup, StageProfile, StageStorage}
+	stages := []Stage{StageNotes, StageUniqueness, StageExecutions, StageCursors, StageStreaks, StageBonuses, StageAchievements, StageSchedules, StageHabits, StageAvatarMedia, StageAvatarCleanup, StagePushSubscriptions, StageReminderSchedules, StageReminderDeliveries, StageProfile, StageStorage}
 	for index, candidate := range stages {
 		if candidate == stage && index+1 < len(stages) {
 			return stages[index+1]
@@ -125,6 +125,7 @@ func stageCollection(stage Stage) string {
 		StageNotes: "notes", StageUniqueness: "executionUniqueness", StageExecutions: "executions",
 		StageCursors: "habitOccurrenceCursors", StageStreaks: "habitStreaks", StageBonuses: "habitBonusAwards",
 		StageAchievements: "userAchievements", StageHabits: "habits", StageAvatarMedia: "avatarMedia", StageAvatarCleanup: "avatarCleanup",
+		StagePushSubscriptions: "pushSubscriptions", StageReminderSchedules: "reminderSchedules", StageReminderDeliveries: "reminderDeliveries",
 	}[stage]
 }
 
@@ -175,7 +176,7 @@ func (r *FirestoreRepository) FunctionalEmpty(ctx context.Context, uid string) (
 			return false, err
 		}
 	}
-	for _, collection := range []string{"notes", "executionUniqueness", "executions", "habitOccurrenceCursors", "habitStreaks", "habitBonusAwards", "userAchievements", "habits", "avatarMedia", "avatarCleanup"} {
+	for _, collection := range []string{"notes", "executionUniqueness", "executions", "habitOccurrenceCursors", "habitStreaks", "habitBonusAwards", "userAchievements", "habits", "avatarMedia", "avatarCleanup", "pushSubscriptions", "reminderSchedules", "reminderDeliveries"} {
 		docs, err := r.client.Collection(collection).Where("ownerUid", "==", uid).Limit(1).Documents(ctx).GetAll()
 		if err != nil {
 			return false, err

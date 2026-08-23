@@ -30,6 +30,7 @@ import (
 	"habitos/internal/profile"
 	"habitos/internal/progress"
 	"habitos/internal/ranking"
+	"habitos/internal/reminder"
 )
 
 type fakeSessionManager struct {
@@ -40,6 +41,37 @@ type fakeSessionManager struct {
 }
 
 type fakeAccountState struct{ deleting bool }
+
+type fakeReminderService struct {
+	subscriptions   []reminder.Subscription
+	reconciliations int
+	timezoneChanged bool
+	processed       int
+}
+
+func (f *fakeReminderService) Reconcile(_ context.Context, _ auth.Identity, changed bool) error {
+	f.reconciliations++
+	f.timezoneChanged = changed
+	return nil
+}
+func (f *fakeReminderService) RegisterSubscription(_ context.Context, identity auth.Identity, endpoint, p256dh, authKey string) (reminder.Subscription, error) {
+	value := reminder.Subscription{ID: reminder.SubscriptionID(identity.UID, endpoint), OwnerUID: identity.UID, Endpoint: endpoint, P256DH: p256dh, Auth: authKey}
+	f.subscriptions = append(f.subscriptions, value)
+	return value, nil
+}
+func (f *fakeReminderService) DisableSubscription(_ context.Context, _ auth.Identity, id string) error {
+	for index := range f.subscriptions {
+		if f.subscriptions[index].ID == id {
+			f.subscriptions = append(f.subscriptions[:index], f.subscriptions[index+1:]...)
+			break
+		}
+	}
+	return nil
+}
+func (f *fakeReminderService) Subscriptions(context.Context, auth.Identity) ([]reminder.Subscription, error) {
+	return append([]reminder.Subscription(nil), f.subscriptions...), nil
+}
+func (f *fakeReminderService) Process(context.Context) (int, error) { return f.processed, nil }
 
 func (f *fakeAccountState) IsDeleting(context.Context, string) (bool, error) { return f.deleting, nil }
 
@@ -148,6 +180,7 @@ type testApp struct {
 	avatarStore  *fakeAvatarStore
 	deletion     *fakeAccountDeletion
 	accountState *fakeAccountState
+	reminders    *fakeReminderService
 }
 
 type fakeAvatarRepository struct {
@@ -470,15 +503,16 @@ func newTestApp(t *testing.T) testApp {
 	avatarStore := &fakeAvatarStore{values: map[string][]byte{}}
 	deletion := &fakeAccountDeletion{}
 	accountState := &fakeAccountState{}
+	reminders := &fakeReminderService{}
 	notes := note.NewService(noteRepo, habitService, executionService)
 	handler, err := NewHandler(Config{
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		FirebaseWeb: FirebaseWebConfig{APIKey: "public-key", ProjectID: "test-project"},
-	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore), Deletion: deletion, AccountState: accountState})
+	}, Dependencies{Sessions: sessions, Profiles: profile.NewService(profiles), Habits: habitService, Executions: executionService, Notes: notes, Progress: progress.NewService(&fakeProgressRepository{}), Ranking: ranking.NewService(rankingRepo), Suggestions: habitsuggestion.NewService(suggestionProvider, 10*time.Second), Avatars: avatar.NewService(avatarRepo, avatarStore), Deletion: deletion, AccountState: accountState, Reminders: reminders})
 	if err != nil {
 		t.Fatalf("NewHandler() retornou erro: %v", err)
 	}
-	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore, deletion: deletion, accountState: accountState}
+	return testApp{handler: handler, sessions: sessions, profiles: profiles, habits: habits, executions: executionRepo, notes: noteRepo, ranking: rankingRepo, suggestions: suggestionProvider, avatarRepo: avatarRepo, avatarStore: avatarStore, deletion: deletion, accountState: accountState, reminders: reminders}
 }
 
 func TestExecutionAndNoteEndpointsDoNotUseAnotherUsersData(t *testing.T) {
@@ -942,6 +976,34 @@ func TestFirstProfileUpdatePreservesOmittedReminderPreferences(t *testing.T) {
 	updated = app.profiles.profiles["firebase-user-a"]
 	if updated.ReminderNotificationEnabled || !updated.ReminderEmailEnabled {
 		t.Fatalf("false explícito não foi respeitado ou campo omitido mudou: %#v", updated)
+	}
+}
+
+func TestPushSubscriptionEndpointsUseAuthenticatedUIDAndDoNotExposeSecrets(t *testing.T) {
+	app := newTestApp(t)
+	token, csrfCookie := issueCSRF(t, app.handler)
+	session := &http.Cookie{Name: auth.SessionCookieName, Value: "valid"}
+	create := httptest.NewRequest(http.MethodPost, "/api/reminders/subscriptions", strings.NewReader(`{"endpoint":"https://push.example.test/device","keys":{"p256dh":"private-p256dh","auth":"private-auth"}}`))
+	create.Header.Set(csrf.HeaderName, token)
+	create.AddCookie(csrfCookie)
+	create.AddCookie(session)
+	recorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(recorder, create)
+	if recorder.Code != http.StatusCreated {
+		t.Fatalf("criar subscription: status=%d corpo=%s", recorder.Code, recorder.Body.String())
+	}
+	if strings.Contains(recorder.Body.String(), "push.example") || strings.Contains(recorder.Body.String(), "private-") {
+		t.Fatalf("resposta expôs endpoint/chaves: %s", recorder.Body.String())
+	}
+	if len(app.reminders.subscriptions) != 1 || app.reminders.subscriptions[0].OwnerUID != "firebase-user-a" {
+		t.Fatalf("subscription=%#v", app.reminders.subscriptions)
+	}
+	internal := httptest.NewRequest(http.MethodPost, "/internal/reminders/process", nil)
+	internal.AddCookie(session)
+	internalRecorder := httptest.NewRecorder()
+	app.handler.ServeHTTP(internalRecorder, internal)
+	if internalRecorder.Code != http.StatusNotFound {
+		t.Fatalf("rota interna apareceu na implantação pública: %d", internalRecorder.Code)
 	}
 }
 

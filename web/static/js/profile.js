@@ -86,6 +86,44 @@ document.querySelector("[data-remove-photo]")?.addEventListener("click", async (
   }
 });
 
+const pushSettings = document.querySelector("[data-push-settings]");
+const pushMessage = pushSettings?.querySelector("[data-push-message]");
+pushSettings?.querySelector("[data-enable-push]")?.addEventListener("click", async (event) => {
+  event.currentTarget.disabled = true;
+  pushMessage.textContent = "Solicitando permissão…";
+  try {
+    if (!("serviceWorker" in navigator) || !("PushManager" in window)) throw new Error("Este navegador não oferece suporte a Notificações.");
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") throw new Error("A permissão de Notificação não foi concedida.");
+    const registration = await navigator.serviceWorker.ready;
+    let subscription = await registration.pushManager.getSubscription();
+    if (!subscription) subscription = await registration.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: base64URLBytes(pushSettings.dataset.vapidPublicKey) });
+    const csrf = await csrfToken();
+    const response = await fetch("/api/reminders/subscriptions", { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json", "X-CSRF-Token": csrf }, body: JSON.stringify(subscription.toJSON()) });
+    if (!response.ok) throw new Error((await response.text()).trim() || "Não foi possível ativar a Notificação.");
+    window.location.reload();
+  } catch (error) {
+    pushMessage.textContent = error.message;
+    event.currentTarget.disabled = false;
+  }
+});
+
+pushSettings?.querySelectorAll("[data-disable-push]").forEach((button) => button.addEventListener("click", async () => {
+  button.disabled = true;
+  try {
+    const csrf = await csrfToken();
+    const response = await fetch(`/api/reminders/subscriptions/${encodeURIComponent(button.dataset.disablePush)}`, { method: "DELETE", credentials: "same-origin", headers: { "X-CSRF-Token": csrf } });
+    if (!response.ok) throw new Error("Não foi possível desativar o dispositivo.");
+    window.location.reload();
+  } catch (error) { pushMessage.textContent = error.message; button.disabled = false; }
+}));
+
+function base64URLBytes(value) {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const raw = atob((value + padding).replace(/-/g, "+").replace(/_/g, "/"));
+  return Uint8Array.from(raw, (character) => character.charCodeAt(0));
+}
+
 const deletionDialog = document.querySelector("[data-account-deletion-dialog]");
 const deletionForm = document.querySelector("[data-account-deletion-form]");
 document.querySelector("[data-open-account-deletion]")?.addEventListener("click", () => deletionDialog.showModal());

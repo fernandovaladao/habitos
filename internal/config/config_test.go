@@ -25,6 +25,8 @@ func resetConfigEnvironment(t *testing.T) {
 		"OPENAI_API_KEY",
 		"OPENAI_MODEL",
 		"AI_REQUEST_TIMEOUT",
+		"APP_BASE_URL", "VAPID_PUBLIC_KEY", "VAPID_PRIVATE_KEY", "VAPID_SUBSCRIBER",
+		"RESEND_API_KEY", "EMAIL_FROM", "EMAIL_REQUEST_TIMEOUT", "REMINDER_PROCESSOR_ENABLED",
 	}
 	for _, name := range variables {
 		t.Setenv(name, "")
@@ -107,6 +109,48 @@ func TestLoadAcceptsValidLocalEmulatorConfiguration(t *testing.T) {
 	}
 	if config.AuthEmulatorURL != "http://127.0.0.1:9099" {
 		t.Fatalf("AuthEmulatorURL = %q", config.AuthEmulatorURL)
+	}
+}
+
+func TestReminderProcessorLocalBypassRequiresDemoEmulators(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("REMINDER_PROCESSOR_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("processador local deveria exigir projeto demo e emuladores")
+	}
+	t.Setenv("FIREBASE_PROJECT_ID", LocalEmulatorProjectID)
+	t.Setenv("GCLOUD_PROJECT", LocalEmulatorProjectID)
+	t.Setenv("FIREBASE_AUTH_EMULATOR_HOST", LocalAuthEmulatorHost)
+	t.Setenv("FIRESTORE_EMULATOR_HOST", LocalFirestoreEmulatorHost)
+	t.Setenv("FIREBASE_STORAGE_EMULATOR_HOST", LocalStorageEmulatorHost)
+	value, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.ReminderProcessor {
+		t.Fatal("processador local válido não foi habilitado")
+	}
+}
+
+func TestProductionProcessorRequiresBackendReminderSecrets(t *testing.T) {
+	setRequiredFirebaseEnvironment(t)
+	t.Setenv("APP_ENV", "production")
+	t.Setenv("SESSION_COOKIE_SECURE", "true")
+	t.Setenv("VAPID_PUBLIC_KEY", "public")
+	t.Setenv("REMINDER_PROCESSOR_ENABLED", "true")
+	if _, err := Load(); err == nil {
+		t.Fatal("processador de produção aceitou segredos ausentes")
+	}
+	for name, value := range map[string]string{"VAPID_PRIVATE_KEY": "private", "VAPID_SUBSCRIBER": "mailto:test@example.test", "RESEND_API_KEY": "resend-secret", "EMAIL_FROM": "HÁBITOS <test@example.test>"} {
+		t.Setenv(name, value)
+	}
+	t.Setenv("APP_BASE_URL", "https://habitos.example.test")
+	value, err := Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !value.ReminderProcessor || value.VAPIDPrivateKey != "private" {
+		t.Fatalf("configuração=%#v", value)
 	}
 }
 

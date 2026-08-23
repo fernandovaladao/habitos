@@ -22,6 +22,7 @@ import (
 	"habitos/internal/habit"
 	"habitos/internal/note"
 	"habitos/internal/profile"
+	"habitos/internal/reminder"
 )
 
 func TestIntegralAccountDeletionWithFirebaseEmulators(t *testing.T) {
@@ -68,6 +69,20 @@ func TestIntegralAccountDeletionWithFirebaseEmulators(t *testing.T) {
 	if err := clients.Storage.Object("avatars/" + uid + "/orphan.jpg").NewWriter(ctx).Close(); err != nil {
 		t.Fatal(err)
 	}
+	for collection, id := range map[string]string{reminder.CollectionSubscriptions: "subscription", reminder.CollectionSchedules: created.ID, reminder.CollectionDeliveries: "delivery"} {
+		if _, err := clients.Firestore.Collection(collection).Doc(id+"-"+uid).Set(ctx, map[string]any{"ownerUid": uid, "habitId": created.ID, "createdAt": now}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	dueSchedule := reminder.Schedule{HabitID: created.ID, OwnerUID: uid, NextScheduledDate: now.Format("2006-01-02"), NextScheduledAt: now.Add(-time.Minute), TimezoneSnapshot: "UTC", ScheduleVersionID: "test", Notification: true, UpdatedAt: now}
+	if _, err := clients.Firestore.Collection(reminder.CollectionSchedules).Doc(created.ID).Set(ctx, dueSchedule); err != nil {
+		t.Fatal(err)
+	}
+	claimID := reminder.DeliveryID(uid, created.ID, now.Format("2006-01-02"), reminder.ChannelNotification)
+	claimDelivery := reminder.Delivery{ID: claimID, OwnerUID: uid, HabitID: created.ID, ScheduledDate: now.Format("2006-01-02"), Channel: reminder.ChannelNotification, ScheduledAt: now, ExpiresAt: now.Add(30 * time.Minute), NextAttemptAt: now, Status: reminder.StatusPending, CreatedAt: now, UpdatedAt: now}
+	if _, err := clients.Firestore.Collection(reminder.CollectionDeliveries).Doc(claimID).Set(ctx, claimDelivery); err != nil {
+		t.Fatal(err)
+	}
 
 	sessions := auth.NewFirebaseSessionManager(clients.Auth)
 	repository := accountdeletion.NewFirestoreRepository(clients.Firestore)
@@ -100,6 +115,26 @@ func TestIntegralAccountDeletionWithFirebaseEmulators(t *testing.T) {
 	}
 	if _, err := avatarService.Upload(ctx, identity, &photo); !errors.Is(err, accountstate.ErrDeleting) {
 		t.Fatalf("foto tornou-se ativa: %v", err)
+	}
+	reminders := reminder.NewService(reminder.NewFirestoreRepository(clients.Firestore), &integrationEmailFake{}, &integrationPushFake{})
+	if _, err := reminders.RegisterSubscription(ctx, identity, "https://push.example.test/late", "p256dh", "auth"); !errors.Is(err, accountstate.ErrDeleting) {
+		t.Fatalf("subscription reapareceu: %v", err)
+	}
+	reminderRepository := reminder.NewFirestoreRepository(clients.Firestore)
+	if err := reminderRepository.ReconcileUser(ctx, uid, now, true); !errors.Is(err, accountstate.ErrDeleting) {
+		t.Fatalf("projeção reapareceu: %v", err)
+	}
+	if _, err := reminderRepository.Due(ctx, now, 50); !errors.Is(err, accountstate.ErrDeleting) {
+		t.Fatalf("delivery foi criada após marcador: %v", err)
+	}
+	if _, acquired, err := reminderRepository.Claim(ctx, claimID, "lease", now); !errors.Is(err, accountstate.ErrDeleting) || acquired {
+		t.Fatalf("lease após marcador: acquired=%v err=%v", acquired, err)
+	}
+	if err := reminderRepository.Retry(ctx, claimID, 1, now.Add(5*time.Minute)); !errors.Is(err, accountstate.ErrDeleting) {
+		t.Fatalf("retry após marcador: %v", err)
+	}
+	if err := reminderRepository.DisableSubscription(ctx, uid, "subscription-"+uid, now); !errors.Is(err, accountstate.ErrDeleting) {
+		t.Fatalf("alteração de subscription após marcador: %v", err)
 	}
 
 	// Repetir a continuação depois de uma resposta hipoteticamente perdida é seguro.

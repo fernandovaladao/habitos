@@ -29,6 +29,7 @@ import (
 	"habitos/internal/profile"
 	"habitos/internal/progress"
 	"habitos/internal/ranking"
+	"habitos/internal/reminder"
 	webassets "habitos/web"
 )
 
@@ -41,10 +42,12 @@ type FirebaseWebConfig struct {
 }
 
 type Config struct {
-	Port          string
-	Logger        *slog.Logger
-	SecureCookies bool
-	FirebaseWeb   FirebaseWebConfig
+	Port              string
+	Logger            *slog.Logger
+	SecureCookies     bool
+	FirebaseWeb       FirebaseWebConfig
+	VAPIDPublicKey    string
+	ReminderProcessor bool
 }
 
 type Dependencies struct {
@@ -59,6 +62,15 @@ type Dependencies struct {
 	Avatars      *avatar.Service
 	Deletion     AccountDeletion
 	AccountState accountstate.Checker
+	Reminders    ReminderService
+}
+
+type ReminderService interface {
+	Reconcile(context.Context, auth.Identity, bool) error
+	RegisterSubscription(context.Context, auth.Identity, string, string, string) (reminder.Subscription, error)
+	DisableSubscription(context.Context, auth.Identity, string) error
+	Subscriptions(context.Context, auth.Identity) ([]reminder.Subscription, error)
+	Process(context.Context) (int, error)
 }
 
 type AccountDeletion interface {
@@ -91,27 +103,32 @@ type pageData struct {
 	Ranking           ranking.Board
 	ProfileRank       *ranking.PublicEntry
 	FirebaseEnabled   bool
+	VAPIDPublicKey    string
+	PushSubscriptions []reminder.Subscription
 }
 
 type handler struct {
-	templates     *template.Template
-	staticFS      fs.FS
-	logger        *slog.Logger
-	sessions      auth.SessionManager
-	profiles      *profile.Service
-	habits        *habit.Service
-	executions    *execution.Service
-	notes         *note.Service
-	progress      *progress.Service
-	ranking       *ranking.Service
-	suggestions   *habitsuggestion.Service
-	avatars       *avatar.Service
-	deletion      AccountDeletion
-	auth          *auth.Middleware
-	activeAuth    *auth.Middleware
-	csrf          *csrf.Protector
-	secureCookies bool
-	firebaseWeb   FirebaseWebConfig
+	templates         *template.Template
+	staticFS          fs.FS
+	logger            *slog.Logger
+	sessions          auth.SessionManager
+	profiles          *profile.Service
+	habits            *habit.Service
+	executions        *execution.Service
+	notes             *note.Service
+	progress          *progress.Service
+	ranking           *ranking.Service
+	suggestions       *habitsuggestion.Service
+	avatars           *avatar.Service
+	deletion          AccountDeletion
+	reminders         ReminderService
+	auth              *auth.Middleware
+	activeAuth        *auth.Middleware
+	csrf              *csrf.Protector
+	secureCookies     bool
+	firebaseWeb       FirebaseWebConfig
+	vapidPublicKey    string
+	reminderProcessor bool
 }
 
 func New(config Config, dependencies Dependencies) (*http.Server, error) {
@@ -141,7 +158,7 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	if config.Logger == nil {
 		config.Logger = slog.Default()
 	}
-	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil || dependencies.Avatars == nil || dependencies.Deletion == nil || dependencies.AccountState == nil {
+	if dependencies.Sessions == nil || dependencies.Profiles == nil || dependencies.Habits == nil || dependencies.Executions == nil || dependencies.Notes == nil || dependencies.Progress == nil || dependencies.Ranking == nil || dependencies.Suggestions == nil || dependencies.Avatars == nil || dependencies.Deletion == nil || dependencies.AccountState == nil || dependencies.Reminders == nil {
 		return nil, errors.New("dependências de autenticação, perfil, hábitos, execuções, notas, progresso, ranking, sugestões e avatares são obrigatórias")
 	}
 
@@ -155,24 +172,27 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	}
 
 	h := &handler{
-		templates:     templates,
-		staticFS:      staticFS,
-		logger:        config.Logger,
-		sessions:      dependencies.Sessions,
-		profiles:      dependencies.Profiles,
-		habits:        dependencies.Habits,
-		executions:    dependencies.Executions,
-		notes:         dependencies.Notes,
-		progress:      dependencies.Progress,
-		ranking:       dependencies.Ranking,
-		suggestions:   dependencies.Suggestions,
-		avatars:       dependencies.Avatars,
-		deletion:      dependencies.Deletion,
-		auth:          auth.NewMiddleware(dependencies.Sessions),
-		activeAuth:    auth.NewActiveMiddleware(dependencies.Sessions, dependencies.AccountState),
-		csrf:          csrf.New(config.SecureCookies),
-		secureCookies: config.SecureCookies,
-		firebaseWeb:   config.FirebaseWeb,
+		templates:         templates,
+		staticFS:          staticFS,
+		logger:            config.Logger,
+		sessions:          dependencies.Sessions,
+		profiles:          dependencies.Profiles,
+		habits:            dependencies.Habits,
+		executions:        dependencies.Executions,
+		notes:             dependencies.Notes,
+		progress:          dependencies.Progress,
+		ranking:           dependencies.Ranking,
+		suggestions:       dependencies.Suggestions,
+		avatars:           dependencies.Avatars,
+		deletion:          dependencies.Deletion,
+		reminders:         dependencies.Reminders,
+		auth:              auth.NewMiddleware(dependencies.Sessions),
+		activeAuth:        auth.NewActiveMiddleware(dependencies.Sessions, dependencies.AccountState),
+		csrf:              csrf.New(config.SecureCookies),
+		secureCookies:     config.SecureCookies,
+		firebaseWeb:       config.FirebaseWeb,
+		vapidPublicKey:    config.VAPIDPublicKey,
+		reminderProcessor: config.ReminderProcessor,
 	}
 
 	mux := http.NewServeMux()
@@ -199,6 +219,12 @@ func NewHandler(config Config, dependencies Dependencies) (http.Handler, error) 
 	mux.Handle("POST /api/habits/{id}/archive", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.archiveHabit))))
 	mux.Handle("POST /api/habits/{id}/reactivate", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.reactivateHabit))))
 	mux.Handle("DELETE /api/habits/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.deleteHabit))))
+	mux.Handle("GET /api/reminders/subscriptions", h.activeAuth.RequireAPI(http.HandlerFunc(h.listPushSubscriptions)))
+	mux.Handle("POST /api/reminders/subscriptions", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.registerPushSubscription))))
+	mux.Handle("DELETE /api/reminders/subscriptions/{id}", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.disablePushSubscription))))
+	if h.reminderProcessor {
+		mux.HandleFunc("POST /internal/reminders/process", h.processReminders)
+	}
 	mux.Handle("POST /api/executions/{id}/simple", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordSimple))))
 	mux.Handle("POST /api/executions/{id}/quantitative", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.recordQuantitative))))
 	mux.Handle("POST /api/habits/{id}/notes", h.activeAuth.RequireAPI(h.csrf.Protect(http.HandlerFunc(h.createNote))))
@@ -264,7 +290,12 @@ func (h *handler) profilePage(w http.ResponseWriter, r *http.Request) {
 		}
 		profileRank = &position
 	}
-	h.render(w, http.StatusOK, "profile", pageData{Title: "Perfil", Description: "Seu perfil e preferências.", Path: "/perfil", Authenticated: true, Email: identity.Email, Profile: userProfile, ProfileRank: profileRank})
+	subscriptions, err := h.reminders.Subscriptions(r.Context(), identity)
+	if err != nil {
+		h.logger.Error("falha ao carregar dispositivos de notificação")
+		subscriptions = nil
+	}
+	h.render(w, http.StatusOK, "profile", pageData{Title: "Perfil", Description: "Seu perfil e preferências.", Path: "/perfil", Authenticated: true, Email: identity.Email, Profile: userProfile, ProfileRank: profileRank, VAPIDPublicKey: h.vapidPublicKey, PushSubscriptions: subscriptions})
 }
 
 func (h *handler) authenticatedProfile(r *http.Request) (auth.Identity, profile.Profile, error) {
@@ -708,6 +739,11 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Não foi possível atualizar o perfil.", http.StatusInternalServerError)
 		return
 	}
+	if err := h.reminders.Reconcile(r.Context(), identity, input.Timezone != currentProfile.Timezone); err != nil {
+		h.logger.Error("falha ao reconciliar lembretes do perfil")
+		http.Error(w, "Perfil salvo, mas não foi possível atualizar os lembretes.", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, userProfile)
 }
 
@@ -854,6 +890,10 @@ func (h *handler) createHabit(w http.ResponseWriter, r *http.Request) {
 		h.writeHabitError(w, err)
 		return
 	}
+	if err := h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+		http.Error(w, "Hábito salvo, mas não foi possível atualizar os lembretes.", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusCreated, value)
 }
 
@@ -913,6 +953,10 @@ func (h *handler) updateHabit(w http.ResponseWriter, r *http.Request) {
 		h.writeHabitError(w, err)
 		return
 	}
+	if err := h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+		http.Error(w, "Hábito salvo, mas não foi possível atualizar os lembretes.", http.StatusInternalServerError)
+		return
+	}
 	writeJSON(w, http.StatusOK, value)
 }
 func (h *handler) duplicateHabit(w http.ResponseWriter, r *http.Request) {
@@ -921,6 +965,10 @@ func (h *handler) duplicateHabit(w http.ResponseWriter, r *http.Request) {
 		var value habit.Habit
 		value, err = h.habits.Duplicate(r.Context(), identity, userProfile.Timezone, r.PathValue("id"))
 		if err == nil {
+			if err = h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+				h.writeHabitError(w, err)
+				return
+			}
 			writeJSON(w, http.StatusCreated, value)
 			return
 		}
@@ -947,6 +995,10 @@ func (h *handler) archiveHabit(w http.ResponseWriter, r *http.Request) {
 		h.writeHabitError(w, err)
 		return
 	}
+	if err := h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, value)
 }
 func (h *handler) reactivateHabit(w http.ResponseWriter, r *http.Request) {
@@ -955,6 +1007,10 @@ func (h *handler) reactivateHabit(w http.ResponseWriter, r *http.Request) {
 		var value habit.Habit
 		value, err = h.habits.Reactivate(r.Context(), identity, userProfile.Timezone, r.PathValue("id"))
 		if err == nil {
+			if err = h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+				h.writeHabitError(w, err)
+				return
+			}
 			writeJSON(w, http.StatusOK, value)
 			return
 		}
@@ -980,7 +1036,72 @@ func (h *handler) deleteHabit(w http.ResponseWriter, r *http.Request) {
 		h.writeHabitError(w, err)
 		return
 	}
+	if err := h.reminders.Reconcile(r.Context(), identity, true); err != nil {
+		h.writeHabitError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusOK, map[string]string{"status": "deleted"})
+}
+
+func (h *handler) listPushSubscriptions(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	values, err := h.reminders.Subscriptions(r.Context(), identity)
+	if err != nil {
+		http.Error(w, "Não foi possível carregar os dispositivos.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"vapidPublicKey": h.vapidPublicKey, "subscriptions": values})
+}
+
+func (h *handler) registerPushSubscription(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	var input struct {
+		Endpoint string `json:"endpoint"`
+		Keys     struct {
+			P256DH string `json:"p256dh"`
+			Auth   string `json:"auth"`
+		} `json:"keys"`
+	}
+	if decodeJSON(r, &input) != nil {
+		http.Error(w, "Subscription inválida.", http.StatusBadRequest)
+		return
+	}
+	value, err := h.reminders.RegisterSubscription(r.Context(), identity, input.Endpoint, input.Keys.P256DH, input.Keys.Auth)
+	if errors.Is(err, reminder.ErrInvalidSubscription) {
+		http.Error(w, "Subscription inválida.", http.StatusUnprocessableEntity)
+		return
+	}
+	if errors.Is(err, reminder.ErrSubscriptionLimit) {
+		http.Error(w, "Limite de 10 dispositivos ativos atingido.", http.StatusConflict)
+		return
+	}
+	if err != nil {
+		h.logger.Error("falha ao registrar dispositivo de notificação")
+		http.Error(w, "Não foi possível ativar as notificações.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusCreated, value)
+}
+
+func (h *handler) disablePushSubscription(w http.ResponseWriter, r *http.Request) {
+	identity, _ := auth.IdentityFromContext(r.Context())
+	if err := h.reminders.DisableSubscription(r.Context(), identity, r.PathValue("id")); err != nil {
+		http.Error(w, "Não foi possível desativar o dispositivo.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"status": "disabled"})
+}
+
+func (h *handler) processReminders(w http.ResponseWriter, r *http.Request) {
+	// Em produção, esta rota existe somente na instância privada do mesmo binário,
+	// protegida pelo IAM do Cloud Run. Ela deliberadamente não aceita sessão de usuário.
+	processed, err := h.reminders.Process(r.Context())
+	if err != nil {
+		h.logger.Error("falha no processamento de lembretes")
+		http.Error(w, "Falha no processamento.", http.StatusInternalServerError)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"processed": processed})
 }
 
 func (h *handler) recordSimple(w http.ResponseWriter, r *http.Request) {

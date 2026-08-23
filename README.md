@@ -27,7 +27,7 @@ A ERS é fonte de verdade para comportamento e regras de negócio. Os protótipo
 
 ## Fundação técnica atual
 
-O projeto contém a fundação do monólito modular, autenticação e perfil, gestão de hábitos e execuções com histórico e notas privadas, gamificação, Progresso e Ranking Geral. Ocorrências são materializadas e fechadas sob demanda, com snapshots temporais e idempotência no Firestore. A criação de hábito oferece sugestão opcional por IA sem salvamento automático. Envio real de notificações ainda não está implementado.
+O projeto contém a fundação do monólito modular, autenticação e perfil, gestão de hábitos e execuções com histórico e notas privadas, gamificação, Progresso, Ranking Geral e lembretes reais por Web Push/E-mail. Ocorrências são materializadas e fechadas sob demanda, com snapshots temporais e idempotência no Firestore. A criação de hábito oferece sugestão opcional por IA sem salvamento automático.
 
 ## Requisitos locais
 
@@ -68,6 +68,17 @@ Configuração da sugestão de hábito com IA:
 
 - `OPENAI_MODEL`, inicialmente `gpt-5.6-luna`;
 - `AI_REQUEST_TIMEOUT`, inicialmente `10s`.
+
+Configuração dos lembretes reais:
+
+- `APP_BASE_URL`, URL pública usada nos links dos e-mails;
+- `VAPID_PUBLIC_KEY`, `VAPID_PRIVATE_KEY` e `VAPID_SUBSCRIBER` para Web Push;
+- `RESEND_API_KEY`, `EMAIL_FROM` e `EMAIL_REQUEST_TIMEOUT` para E-mail;
+- `REMINDER_PROCESSOR_ENABLED=true` somente na implantação privada invocada pelo Cloud Scheduler ou no desenvolvimento local.
+
+`EMAIL_FROM` precisa pertencer a um domínio verificado no Resend antes do smoke test de produção. A implantação privada do mesmo binário deve exigir autenticação IAM do Cloud Run. A service account dedicada do Cloud Scheduler recebe somente `roles/run.invoker`; a implantação pública mantém `REMINDER_PROCESSOR_ENABLED=false`, portanto não registra a rota interna. O Scheduler chama a implantação privada a cada minuto com OIDC. Não há validação JWT artesanal na aplicação porque a autenticação é realizada pelo Cloud Run.
+
+No ambiente local com projeto `demo-habitos-local` e Emulators, a rota pode ser habilitada para processamento manual. Fakes automatizados não enviam Push ou E-mail reais.
 
 A integração usa a OpenAI Responses API com Structured Outputs. Somente título e descrição são enviados pelo backend; a aplicação não persiste nem registra prompts, respostas ou sugestões. Nunca exponha `OPENAI_API_KEY` no frontend ou no repositório. Os testes usam fakes e não chamam a API real.
 
