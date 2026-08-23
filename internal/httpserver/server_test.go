@@ -901,6 +901,50 @@ func TestEnsureAndUpdateProfileUseAuthenticatedUID(t *testing.T) {
 	}
 }
 
+func TestFirstProfileUpdatePreservesOmittedReminderPreferences(t *testing.T) {
+	app := newTestApp(t)
+	token, csrfCookie := issueCSRF(t, app.handler)
+	sessionCookie := &http.Cookie{Name: auth.SessionCookieName, Value: "valid"}
+
+	ensureRecorder := httptest.NewRecorder()
+	ensureRequest := httptest.NewRequest(http.MethodPost, "/api/profile/ensure", strings.NewReader(`{"timezone":"America/Sao_Paulo"}`))
+	ensureRequest.Header.Set(csrf.HeaderName, token)
+	ensureRequest.AddCookie(csrfCookie)
+	ensureRequest.AddCookie(sessionCookie)
+	app.handler.ServeHTTP(ensureRecorder, ensureRequest)
+	if ensureRecorder.Code != http.StatusOK {
+		t.Fatalf("EnsureProfile status=%d corpo=%s", ensureRecorder.Code, ensureRecorder.Body.String())
+	}
+
+	updateRecorder := httptest.NewRecorder()
+	updateRequest := httptest.NewRequest(http.MethodPut, "/api/profile", strings.NewReader(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":false}`))
+	updateRequest.Header.Set(csrf.HeaderName, token)
+	updateRequest.AddCookie(csrfCookie)
+	updateRequest.AddCookie(sessionCookie)
+	app.handler.ServeHTTP(updateRecorder, updateRequest)
+	if updateRecorder.Code != http.StatusOK {
+		t.Fatalf("Update status=%d corpo=%s", updateRecorder.Code, updateRecorder.Body.String())
+	}
+	updated := app.profiles.profiles["firebase-user-a"]
+	if !updated.ReminderNotificationEnabled || !updated.ReminderEmailEnabled {
+		t.Fatalf("primeiro salvamento desativou preferências omitidas: %#v", updated)
+	}
+
+	explicitFalseRecorder := httptest.NewRecorder()
+	explicitFalseRequest := httptest.NewRequest(http.MethodPut, "/api/profile", strings.NewReader(`{"nickname":"Pessoa A","age":16,"timezone":"America/Sao_Paulo","rankingOptIn":false,"reminderNotificationEnabled":false}`))
+	explicitFalseRequest.Header.Set(csrf.HeaderName, token)
+	explicitFalseRequest.AddCookie(csrfCookie)
+	explicitFalseRequest.AddCookie(sessionCookie)
+	app.handler.ServeHTTP(explicitFalseRecorder, explicitFalseRequest)
+	if explicitFalseRecorder.Code != http.StatusOK {
+		t.Fatalf("Update explícito status=%d corpo=%s", explicitFalseRecorder.Code, explicitFalseRecorder.Body.String())
+	}
+	updated = app.profiles.profiles["firebase-user-a"]
+	if updated.ReminderNotificationEnabled || !updated.ReminderEmailEnabled {
+		t.Fatalf("false explícito não foi respeitado ou campo omitido mudou: %#v", updated)
+	}
+}
+
 func TestPrivatePhotoUploadReadAndOwnerIsolation(t *testing.T) {
 	app := newTestApp(t)
 	identity := app.sessions.identity

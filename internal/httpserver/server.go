@@ -661,8 +661,8 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 		Weight                      string `json:"weight"`
 		Height                      string `json:"height"`
 		Gender                      string `json:"gender"`
-		ReminderNotificationEnabled bool   `json:"reminderNotificationEnabled"`
-		ReminderEmailEnabled        bool   `json:"reminderEmailEnabled"`
+		ReminderNotificationEnabled *bool  `json:"reminderNotificationEnabled"`
+		ReminderEmailEnabled        *bool  `json:"reminderEmailEnabled"`
 	}
 	if err := decodeJSON(r, &input); err != nil {
 		http.Error(w, "Dados de perfil inválidos.", http.StatusBadRequest)
@@ -687,9 +687,17 @@ func (h *handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+	reminderNotificationEnabled := currentProfile.ReminderNotificationEnabled
+	if input.ReminderNotificationEnabled != nil {
+		reminderNotificationEnabled = *input.ReminderNotificationEnabled
+	}
+	reminderEmailEnabled := currentProfile.ReminderEmailEnabled
+	if input.ReminderEmailEnabled != nil {
+		reminderEmailEnabled = *input.ReminderEmailEnabled
+	}
 	userProfile, err := h.profiles.Update(r.Context(), identity, profile.Update{
 		Nickname: input.Nickname, Age: input.Age, Timezone: input.Timezone, RankingOptIn: input.RankingOptIn, WeightHundredths: weight, HeightHundredths: height, Gender: input.Gender,
-		AvatarType: currentProfile.AvatarType, ReminderNotificationEnabled: input.ReminderNotificationEnabled, ReminderEmailEnabled: input.ReminderEmailEnabled,
+		AvatarType: currentProfile.AvatarType, ReminderNotificationEnabled: reminderNotificationEnabled, ReminderEmailEnabled: reminderEmailEnabled,
 	})
 	if errors.Is(err, profile.ErrInvalidNickname) || errors.Is(err, profile.ErrInvalidAge) || errors.Is(err, profile.ErrInvalidTimezone) || errors.Is(err, profile.ErrInvalidWeight) || errors.Is(err, profile.ErrInvalidHeight) || errors.Is(err, profile.ErrInvalidGender) || errors.Is(err, profile.ErrInvalidAvatar) {
 		http.Error(w, err.Error(), http.StatusUnprocessableEntity)
